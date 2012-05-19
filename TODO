@@ -1,0 +1,9 @@
+* split out jenkins api calls from cli functionality
+ - add iterator interface to the "tail" api
+* add support for views as well as direct list of jobs
+* add man/perldoc documentation
+* add "queue" command to list what is pending
+* list command should return status of most recent job (running/aborted/queued)
+* make deps variable ie use YAML instead of YAML::Syck if available
+* add "history" command to print out build history
+* suppress colorized output when stdout is not tty

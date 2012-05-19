@@ -1,0 +1,53 @@
+Simple Jenkins command line interface written in perl.
+
+USAGE
+----------------------------------------------------------------------------
+$ jenkins --help
+Usage: jenkins [options] [command] [<pattern>]
+
+Global Options:
+    --baseuri=<uri>: base uri to jenkins server [http://jenkins]
+    --stoplight:     make blue builds green [off]
+    --job=<name>:    specify a job name, can be repeated
+
+Commands:
+    ls|list [<pattern>]: show status of builds, optionally filter on pattern
+    start <pattern>:     start job
+    stop <pattern>:      stop job
+    tail <pattern>:      tail the most recent build log for a job
+    disable <pattern>:   disable job
+    enable <pattern>:    enable a job
+    wipeout <pattern>:   delete current build workspace for a job
+
+* Note <pattern> can be any regular expression to match jobs in your
+  default job list/view
+
+CONFIG FILE (in YAML format)
+----------------------------------------------------------------------------
+
+$ cat ~/.jenkins 
+baseuri: http://jenkins.build.host
+jobs: 
+      - MyJob-1
+      - MyJob-2
+      - MyJob-3
+
+stoplight: 1
+
+COPYRIGHT and LICENSE
+----------------------------------------------------------------------------
+Copyright 2012 Netflix, Inc.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+

@@ -1,0 +1,272 @@
+#!/usr/bin/env perl
+
+#  Copyright 2012 Netflix, Inc.
+#
+#     Licensed under the Apache License, Version 2.0 (the "License");
+#     you may not use this file except in compliance with the License.
+#     You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#     Unless required by applicable law or agreed to in writing, software
+#     distributed under the License is distributed on an "AS IS" BASIS,
+#     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#     See the License for the specific language governing permissions and
+#     limitations under the License.
+
+
+use strict;
+use warnings;
+
+use YAML::Syck;
+use JSON::Syck;
+use XML::Simple;
+use LWP::UserAgent;
+use HTTP::Cookies;
+use Term::ANSIColor;
+use Data::Dumper;
+use Getopt::Long;
+our @CLEANUP;
+
+$|++;
+
+sub usage {
+    my $err = shift || 0;
+    my $io = $err ? *STDERR : *STDOUT;
+
+    print $io ("-")x76,"\n" if $err;
+    print $io <<EOM;
+Usage: $0 [options] [command] [<pattern>]
+
+Global Options:
+    --baseuri=<uri>: base uri to jenkins server [http://jenkins]
+    --stoplight:     make blue builds green [off]
+    --job=<name>:    specify a job name, can be repeated
+
+Commands:
+    ls|list [<pattern>]: show status of builds, optionally filter on pattern
+    start <pattern>:     start job
+    stop <pattern>:      stop job
+    tail <pattern>:      tail the most recent build log for a job
+    disable <pattern>:   disable job
+    enable <pattern>:    enable a job
+    wipeout <pattern>:   delete current build workspace for a job
+
+* Note <pattern> can be any regular expression to match jobs in your
+  default job list/view
+EOM
+    exit $err;
+}
+
+my $ua = LWP::UserAgent->new(
+    cookie_jar => HTTP::Cookies->new(
+        file => "$ENV{HOME}/.$ENV{USER}-cookies.txt",
+        autosave => 1,
+    )
+);
+
+my $config = -f "$ENV{HOME}/.jenkins" ? YAML::Syck::LoadFile("$ENV{HOME}/.jenkins") : {};
+$config->{baseuri}  ||= "http://jenkins";
+$config->{stoplight} ||= 0;
+
+my @actions;
+
+my @commands = qw(ls list start stop tail disable enable wipeout);
+
+my %options;
+$options{$_} = sub { push @actions, $_} for @commands;
+
+GetOptions(
+    "help"      => sub { usage(0) },
+    "baseuri=s" => \$config->{baseuri},
+    "stoplight" => \$config->{stoplight},
+    "job=s@"    => \$config->{jobs},
+    %options,
+) || usage(1);
+
+my @args;
+for my $arg ( @ARGV ) {
+    if( grep { $arg eq $_ } @commands ) {
+        push @actions, $arg;
+    }
+    else {
+        push @args, $arg;
+    }
+}
+
+my $uri = "$config->{baseuri}/api/xml?wrapper=jobs&xpath=/*/job";
+if( $config->{jobs} ) {
+    $uri .= "[name='" . join ("'or name='", @{$config->{jobs}}) . "']";
+}
+my $res = $ua->get($uri);
+
+my $data = XMLin($res->decoded_content(), ForceArray => ["job"], KeyAttr => []);
+my $jobs = $data->{job} || [];
+
+my $filter = shift @args || ".";
+
+if( $filter ) {
+    $jobs = [ grep { $_->{name} =~ /$filter/ } @$jobs ];
+    my @exact = grep { $_->{name} eq $filter } @$jobs;
+    $jobs = \@exact if @exact;
+
+    if( ! @$jobs ) {
+        die "No jobs found for pattern /$filter/\n";
+    }
+}
+
+if( !@actions ) {
+    list($jobs, @args);
+}
+else {
+    for my $action ( @actions ) {
+        no strict "refs";
+        $action->($jobs, \@args);
+    }
+}
+
+sub list {
+    my ( $jobs, $args ) = @_;
+    print colorize( $_->{color}, $_->{name} ), "\n" for @$jobs;
+}
+
+BEGIN { 
+    # create function aliases
+    no warnings "once";
+    *ls = \&list;
+};
+
+sub start {
+    my ( $jobs, $args ) = @_;
+    login();
+    for my $job ( @$jobs ) {
+        $ua->post("$job->{url}/build", {});
+        print "$job->{name} started\n";
+    }
+}
+
+sub stop {
+    my ( $jobs, $args ) = @_;
+    login();
+    for my $job ( @$jobs ) {
+        my $uri = "$job->{url}/api/json?depth=0";
+        my $res = $ua->get($uri);
+        my $data = JSON::Syck::Load($res->decoded_content);
+        $ua->post("$data->{lastBuild}->{url}/stop", {});
+        print "$job->{name} stopped\n";
+    }
+}
+
+sub disable {
+    my ( $jobs, $args ) = @_;
+    login();
+    for my $job ( @$jobs ) {
+        $ua->post("$job->{url}/disable", {});
+        print "$job->{name} disabled\n";
+    }
+}
+
+sub enable {
+    my ( $jobs, $args ) = @_;
+    login();
+    for my $job ( @$jobs ) {
+        $ua->post("$job->{url}/enable", {});
+        print "$job->{name} enabled\n";
+    }
+}
+
+sub wipeout {
+    my ( $jobs, $args ) = @_;
+    login();
+    for my $job ( @$jobs ) { 
+        my $res = $ua->post("$job->{url}/doWipeOutWorkspace", {});
+        print "$job->{name} workspace wiped out\n";
+        print $res->as_string;
+    }
+}
+
+sub tail {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my $uri = "$job->{url}/api/json?depth=0";
+    my $res = $ua->get($uri);
+    my $data = JSON::Syck::Load($res->decoded_content);
+    $res = $ua->post("$data->{lastBuild}->{url}/logText/progressiveText", { start => 0 });
+    print $res->decoded_content;
+    while( $res->header("X-More-Data") && $res->header("X-More-Data") eq 'true' ) {
+        $res = $ua->post(
+            "$data->{lastBuild}->{url}/logText/progressiveText", { 
+                start => $res->header("X-Text-Size")
+            }
+        );
+        print $res->decoded_content;
+        sleep 1;
+    }
+}
+
+sub require_one {
+    my ( $jobs ) = @_;
+    if ( @$jobs > 1 ) {
+        my $prog = File::Basename::basename($0);
+        my ($pkg, $func) = (caller(1))[0,3];
+        $func =~ s/$pkg\:://;
+        die scalar(@$jobs)
+            . " matches for pattern /$filter/ but only one job can be sent to: $prog $func\nMatches:\n\t"
+            . join("\n\t", map { $_->{name} } @$jobs )
+            . "\n";
+    }
+}
+
+sub login {
+    my $res = $ua->get("$config->{baseuri}/login");
+    if( $res->decoded_content =~ />log in</ ) {
+        $res = $ua->post(
+            "$config->{baseuri}/j_acegi_security_check", {
+                j_username => $ENV{USER},
+                j_password => password(),
+            }
+        );
+        my $res = $ua->get("$config->{baseuri}/login"); 
+        $ua->cookie_jar->scan(
+            sub {
+                my @args = @_;
+                # dont discard cookies, so we dont get prompted for a password everytime
+                $args[9] = 0;
+                $ua->cookie_jar->set_cookie(@args);
+            }
+        );
+    }
+}
+
+sub password {
+    my $tty = qx{tty};
+    chomp($tty);
+    open TTY, ">$tty" or die "Failed to open tty $tty: $!";
+    push @CLEANUP, sub {
+        system("stty echo");
+    };
+    system("stty -echo");
+    print TTY "Password: ";
+    my $pass = <STDIN>;
+    $CLEANUP[-1]->();
+    print TTY "\n";
+    chomp($pass);
+    return $pass;
+}
+
+sub colorize {
+    my $color = shift;
+    $color =~ s/_anime$//;
+    $color = "green" if $config->{stoplight} && $color eq 'blue';
+    $color = 'faint' if $color eq 'disabled';
+    $color = 'red'   if $color eq 'aborted';
+    $color = 'faint' if $color eq 'grey';
+    return color($color), @_, color("reset");
+}
+
+END { 
+    for my $cleaner ( @CLEANUP ) {
+        $cleaner->();
+    }
+}
