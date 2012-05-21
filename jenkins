@@ -19,14 +19,9 @@ use strict;
 use warnings;
 
 use YAML::Syck;
-use JSON::Syck;
-use XML::Simple;
-use LWP::UserAgent;
-use HTTP::Cookies;
 use Term::ANSIColor;
-use Data::Dumper;
 use Getopt::Long;
-our @CLEANUP;
+use WWW::Jenkins;
 
 $|++;
 
@@ -58,31 +53,29 @@ EOM
     exit $err;
 }
 
-my $ua = LWP::UserAgent->new(
-    cookie_jar => HTTP::Cookies->new(
-        file => "$ENV{HOME}/.$ENV{USER}-cookies.txt",
-        autosave => 1,
-    )
-);
-
 my $config = -f "$ENV{HOME}/.jenkins" ? YAML::Syck::LoadFile("$ENV{HOME}/.jenkins") : {};
 $config->{baseuri}  ||= "http://jenkins";
-$config->{stoplight} ||= 0;
+$config->{user} ||= $ENV{USER};
 
 my @actions;
-
 my @commands = qw(ls list start stop tail disable enable wipeout);
 
 my %options;
-$options{$_} = sub { push @actions, $_} for @commands;
+$options{$_} = sub { push @actions, shift } for @commands;
 
 GetOptions(
     "help"      => sub { usage(0) },
     "baseuri=s" => \$config->{baseuri},
     "stoplight" => \$config->{stoplight},
     "job=s@"    => \$config->{jobs},
+    "yes"       => \$config->{yes},
+    "color!"    => \$config->{color},
+    "verbose"   => \$config->{verbose},
+    "user"      => \$config->{user},
     %options,
 ) || usage(1);
+
+my $jenkins = WWW::Jenkins->new(%$config);
 
 my @args;
 for my $arg ( @ARGV ) {
@@ -94,20 +87,13 @@ for my $arg ( @ARGV ) {
     }
 }
 
-my $uri = "$config->{baseuri}/api/xml?wrapper=jobs&xpath=/*/job";
-if( $config->{jobs} ) {
-    $uri .= "[name='" . join ("'or name='", @{$config->{jobs}}) . "']";
-}
-my $res = $ua->get($uri);
-
-my $data = XMLin($res->decoded_content(), ForceArray => ["job"], KeyAttr => []);
-my $jobs = $data->{job} || [];
+my $jobs = $jenkins->jobs(@{$config->{jobs}});
 
 my $filter = shift @args || ".";
 
 if( $filter ) {
-    $jobs = [ grep { $_->{name} =~ /$filter/ } @$jobs ];
-    my @exact = grep { $_->{name} eq $filter } @$jobs;
+    $jobs = [ grep { $_->name =~ /$filter/ } @$jobs ];
+    my @exact = grep { $_->name eq $filter } @$jobs;
     $jobs = \@exact if @exact;
 
     if( ! @$jobs ) {
@@ -121,86 +107,54 @@ if( !@actions ) {
 else {
     for my $action ( @actions ) {
         no strict "refs";
-        $action->($jobs, \@args);
+        my $func = *{"main::$action"};
+        $func->($jobs, \@args);
     }
-}
-
-sub list {
-    my ( $jobs, $args ) = @_;
-    print colorize( $_->{color}, $_->{name} ), "\n" for @$jobs;
 }
 
 BEGIN { 
     # create function aliases
     no warnings "once";
     *ls = \&list;
+
+    # these routines are all the same, just loop over all jobs
+    # and try to run the operation on each job.
+    for my $func (qw(start stop disable enable wipeout)) {
+        no strict 'refs';
+        *{"main::$func"} = sub {
+            my ( $jobs, $args ) = @_;
+            confirm_multiple($func, $jobs) if @$jobs > 1;
+            for my $job ( @$jobs ) {
+                eval {
+                    $job->$func()
+                };
+                printf "%s %s: %s\n", ucfirst($func), $job->name(), $@ ? "ERROR: $@" : "OK";
+                       
+            }
+        }
+    }
 };
 
-sub start {
+sub list {
     my ( $jobs, $args ) = @_;
-    login();
     for my $job ( @$jobs ) {
-        $ua->post("$job->{url}/build", {});
-        print "$job->{name} started\n";
-    }
-}
-
-sub stop {
-    my ( $jobs, $args ) = @_;
-    login();
-    for my $job ( @$jobs ) {
-        my $uri = "$job->{url}/api/json?depth=0";
-        my $res = $ua->get($uri);
-        my $data = JSON::Syck::Load($res->decoded_content);
-        $ua->post("$data->{lastBuild}->{url}/stop", {});
-        print "$job->{name} stopped\n";
-    }
-}
-
-sub disable {
-    my ( $jobs, $args ) = @_;
-    login();
-    for my $job ( @$jobs ) {
-        $ua->post("$job->{url}/disable", {});
-        print "$job->{name} disabled\n";
-    }
-}
-
-sub enable {
-    my ( $jobs, $args ) = @_;
-    login();
-    for my $job ( @$jobs ) {
-        $ua->post("$job->{url}/enable", {});
-        print "$job->{name} enabled\n";
-    }
-}
-
-sub wipeout {
-    my ( $jobs, $args ) = @_;
-    login();
-    for my $job ( @$jobs ) { 
-        my $res = $ua->post("$job->{url}/doWipeOutWorkspace", {});
-        print "$job->{name} workspace wiped out\n";
-        print $res->as_string;
-    }
+        my $markers = "";
+        $markers .= "*" if $job->is_running;
+        $markers .= "?" if $job->was_aborted;
+        $markers .= "+" if $job->is_queued;
+        print colorize($job->color, $job->name), "$markers\n";
+    }        
 }
 
 sub tail {
     my ( $jobs, $args ) = @_;
     require_one($jobs);
     my $job = $jobs->[0];
-    my $uri = "$job->{url}/api/json?depth=0";
-    my $res = $ua->get($uri);
-    my $data = JSON::Syck::Load($res->decoded_content);
-    $res = $ua->post("$data->{lastBuild}->{url}/logText/progressiveText", { start => 0 });
-    print $res->decoded_content;
-    while( $res->header("X-More-Data") && $res->header("X-More-Data") eq 'true' ) {
-        $res = $ua->post(
-            "$data->{lastBuild}->{url}/logText/progressiveText", { 
-                start => $res->header("X-Text-Size")
-            }
-        );
-        print $res->decoded_content;
+    my $cursor = $job->logCursor;
+    while(1) {
+        my $content = $cursor->();
+        last unless defined $content;
+        print $content;
         sleep 1;
     }
 }
@@ -218,55 +172,29 @@ sub require_one {
     }
 }
 
-sub login {
-    my $res = $ua->get("$config->{baseuri}/login");
-    if( $res->decoded_content =~ />log in</ ) {
-        $res = $ua->post(
-            "$config->{baseuri}/j_acegi_security_check", {
-                j_username => $ENV{USER},
-                j_password => password(),
-            }
-        );
-        my $res = $ua->get("$config->{baseuri}/login"); 
-        $ua->cookie_jar->scan(
-            sub {
-                my @args = @_;
-                # dont discard cookies, so we dont get prompted for a password everytime
-                $args[9] = 0;
-                $ua->cookie_jar->set_cookie(@args);
-            }
-        );
-    }
-}
-
-sub password {
-    my $tty = qx{tty};
-    chomp($tty);
-    open TTY, ">$tty" or die "Failed to open tty $tty: $!";
-    push @CLEANUP, sub {
-        system("stty echo");
-    };
-    system("stty -echo");
-    print TTY "Password: ";
-    my $pass = <STDIN>;
-    $CLEANUP[-1]->();
-    print TTY "\n";
-    chomp($pass);
-    return $pass;
+sub confirm_multiple {
+    my ($operation, $jobs) = @_;
+    return if $config->{yes};
+    my ($in, $out) = $jenkins->stdio;
+    while(1) {
+        print $out "Mutliple jobs found for pattern /$filter/\n";
+        print $out "    ", $_->name, "\n" for @$jobs;
+        print $out "Do you want to $operation all of them? [y/N]: ";
+        my $ans = <$in>;
+        chomp($ans);
+        if( !$ans || $ans =~ /^n/i ) {
+            exit;
+        }
+        if( $ans =~ /^y/i ) {
+            return;
+        }
+        print $out "Sorry, didn't understand \"$ans\"\n";
+    }   
 }
 
 sub colorize {
-    my $color = shift;
-    $color =~ s/_anime$//;
-    $color = "green" if $config->{stoplight} && $color eq 'blue';
-    $color = 'faint' if $color eq 'disabled';
-    $color = 'red'   if $color eq 'aborted';
-    $color = 'faint' if $color eq 'grey';
+    my ( $color ) = shift;
+    # dont colorize when redirected to non-tty
+    return @_ unless -t STDOUT;
     return color($color), @_, color("reset");
-}
-
-END { 
-    for my $cleaner ( @CLEANUP ) {
-        $cleaner->();
-    }
 }
