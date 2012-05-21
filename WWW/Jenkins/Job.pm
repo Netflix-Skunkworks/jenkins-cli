@@ -20,7 +20,7 @@ use warnings;
 sub new {
     my $class = shift;
     my $self = bless { @_ }, $class;
-    for my $required ( qw(name jenkins url lastBuild color inQueue) ) {
+    for my $required ( qw(name jenkins url color inQueue) ) {
         defined $self->{$required} || die "no $required parameter to WWW::Jenkins::Job->new()";
     }
     return $self;
@@ -64,6 +64,13 @@ sub start {
 
 sub stop {
     my ( $self ) = @_;
+
+    die "job " . $self->name() . " has never been run"
+        unless $self->{lastBuild};
+
+    # dont stop something not running
+    return 1 unless $self->is_running();
+
     $self->j->login();
     my $resp = $self->ua->post("$self->{lastBuild}->{url}/stop", {});
     if( $resp->is_error ) {
@@ -99,6 +106,8 @@ sub wipeout {
 
 sub logCursor {
     my ( $self ) = @_;
+    die "job " . $self->name() . " has never been run"
+        unless $self->{lastBuild};
     my $res = undef;
     return sub {
         if( !$res ) {

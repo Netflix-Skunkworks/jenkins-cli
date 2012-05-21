@@ -61,6 +61,29 @@ sub jobs {
     return wantarray ? @out : \@out;
 }
 
+sub views {
+    my ($self,@views) = @_;
+    
+    my @out = ();
+    for my $view ( @views ) {
+        # turns A/B into A/view/B which is needed
+        # in jenkins uri for subviews
+        my $viewPath = join("/view/", split '/', $view);
+        my $uri = "$self->{baseuri}/view/$viewPath/api/json?depth=1&tree=views[name,url],jobs[name,inQueue,url,lastBuild[number,url],color]";
+        my $res = $self->{ua}->get($uri);
+        my $data = JSON::Syck::Load($res->decoded_content());
+        # we dont know if the view has subviews or it it has jobs, so try for both
+        # and recurse if we find a subview
+        if( $data->{jobs} ) {
+            push @out, WWW::Jenkins::Job->new(%$_, jenkins => $self) for @{$data->{jobs}};
+        }
+        if( $data->{views} ) {
+            push @out, $self->views("$view/$_->{name}") for @{$data->{views}};
+        }
+    }
+    return wantarray ? @out : \@out;
+}
+
 sub login {
     my ( $self ) = @_;
     return if $self->{logged_in};

@@ -37,6 +37,7 @@ Global Options:
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
+    --view=<name>:   speficy a list of jobs by view
 
 Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
@@ -68,6 +69,7 @@ GetOptions(
     "baseuri=s" => \$config->{baseuri},
     "stoplight" => \$config->{stoplight},
     "job=s@"    => \$config->{jobs},
+    "view=s@"   => \$config->{views},
     "yes"       => \$config->{yes},
     "color!"    => \$config->{color},
     "verbose"   => \$config->{verbose},
@@ -87,28 +89,30 @@ for my $arg ( @ARGV ) {
     }
 }
 
-my $jobs = $jenkins->jobs(@{$config->{jobs}});
+my %uniq;
+my @jobs =  grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$config->{jobs}});
+push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$config->{views}});
 
 my $filter = shift @args || ".";
 
 if( $filter ) {
-    $jobs = [ grep { $_->name =~ /$filter/ } @$jobs ];
-    my @exact = grep { $_->name eq $filter } @$jobs;
-    $jobs = \@exact if @exact;
+    @jobs = grep { $_->name =~ /$filter/ } @jobs;
+    my @exact = grep { $_->name eq $filter } @jobs;
+    @jobs = @exact if @exact;
 
-    if( ! @$jobs ) {
+    if( ! @jobs ) {
         die "No jobs found for pattern /$filter/\n";
     }
 }
 
 if( !@actions ) {
-    list($jobs, @args);
+    list(\@jobs, @args);
 }
 else {
     for my $action ( @actions ) {
         no strict "refs";
         my $func = *{"main::$action"};
-        $func->($jobs, \@args);
+        $func->(\@jobs, \@args);
     }
 }
 
