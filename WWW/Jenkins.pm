@@ -64,7 +64,6 @@ sub jobs {
 sub login {
     my ( $self ) = @_;
     return if $self->{logged_in};
-    #local $self->{ua} = $self->{verbose} ? bless $self->{ua}, "LWP::UserAgent" : $self->{ua};
     # FIXME there has to be a better way to tell if we
     # are already logged in ...
     # just load the page with the smallest content that I could find
@@ -130,6 +129,7 @@ sub password {
     }
     my ($in, $out) = $self->stdio;
 
+    my $old = select $out;
     eval "use Term::ReadKey";
     if( $@ ) {
         # no readkey, so try for stty to turn off echoing
@@ -147,15 +147,16 @@ sub password {
     else { 
         # use readkey to turn off echoing
         push @CLEANUP, sub {
-            Term::ReadKey::ReadMode("restore");
+            Term::ReadKey::ReadMode("restore", $out);
         };
-        Term::ReadKey::ReadMode("noecho");
+        Term::ReadKey::ReadMode("noecho", $out);
     }
     print $out "Jenkins Password [$self->{user}]: ";
     my $pass = <$in>;
     $CLEANUP[-1]->();
     print $out "\n";
     chomp($pass);
+    select $old;
     return $pass;
 }
 
