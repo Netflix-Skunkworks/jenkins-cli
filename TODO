@@ -1,4 +1,3 @@
 * add man/perldoc documentation
-* add "queue" command to list what is pending
 * make deps variable ie use YAML instead of YAML::Syck if available
 * add "history" command to print out build history

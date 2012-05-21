@@ -47,6 +47,7 @@ Commands:
     disable <pattern>:   disable job
     enable <pattern>:    enable a job
     wipeout <pattern>:   delete current build workspace for a job
+    q|queue:             shows pending build queue grouped by build-slaves
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -59,7 +60,7 @@ $config->{baseuri}  ||= "http://jenkins";
 $config->{user} ||= $ENV{USER};
 
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout);
+my @commands = qw(ls list start stop tail disable enable wipeout q queue);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
@@ -74,6 +75,7 @@ GetOptions(
     "color!"    => \$config->{color},
     "verbose"   => \$config->{verbose},
     "user"      => \$config->{user},
+    "stuck"     => \$config->{stuck},
     %options,
 ) || usage(1);
 
@@ -89,30 +91,17 @@ for my $arg ( @ARGV ) {
     }
 }
 
-my %uniq;
-my @jobs =  grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$config->{jobs}});
-push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$config->{views}});
-
 my $filter = shift @args || ".";
 
-if( $filter ) {
-    @jobs = grep { $_->name =~ /$filter/ } @jobs;
-    my @exact = grep { $_->name eq $filter } @jobs;
-    @jobs = @exact if @exact;
-
-    if( ! @jobs ) {
-        die "No jobs found for pattern /$filter/\n";
-    }
-}
-
 if( !@actions ) {
-    list(\@jobs, @args);
+    list(load("list"), @args);
 }
 else {
     for my $action ( @actions ) {
         no strict "refs";
+        
         my $func = *{"main::$action"};
-        $func->(\@jobs, \@args);
+        $func->(load($action), \@args);
     }
 }
 
@@ -120,6 +109,7 @@ BEGIN {
     # create function aliases
     no warnings "once";
     *ls = \&list;
+    *q  = \&queue;
 
     # these routines are all the same, just loop over all jobs
     # and try to run the operation on each job.
@@ -139,6 +129,29 @@ BEGIN {
     }
 };
 
+{
+    my $jobs;
+    sub load {
+        my $action = shift;
+        return [] if $action eq 'q' || $action eq 'queue';
+        return $jobs if $jobs;
+        my %uniq;
+        my @jobs =  grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$config->{jobs}});
+        push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$config->{views}});
+        
+        if( $filter ) {
+            @jobs = grep { $_->name =~ /$filter/ } @jobs;
+            my @exact = grep { $_->name eq $filter } @jobs;
+            @jobs = @exact if @exact;
+            
+            if( ! @jobs ) {
+                die "No jobs found for pattern /$filter/\n";
+            }
+        }
+        return $jobs = \@jobs;
+    }
+}
+
 sub list {
     my ( $jobs, $args ) = @_;
     for my $job ( @$jobs ) {
@@ -148,6 +161,42 @@ sub list {
         $markers .= "+" if $job->is_queued;
         print colorize($job->color, $job->name), "$markers\n";
     }        
+}
+
+sub queue {
+    my $queue = $jenkins->queue();
+
+    for my $host ( keys %{$queue->{blocked}} ) {
+        my $hostStr = $host;
+        # if hostname will wrap, just truncate the middle
+        if ( length($host) > 76 ) {
+            $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
+        }
+        print colorize("bold", colorize("underline", $hostStr)), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{blocked}->{$host}};
+    }
+
+    if( $config->{stuck} ) {
+        for my $host ( keys %{$queue->{stuck}} ) {
+            my $hostStr = $host;
+            # if hostname will wrap, just truncate the middle
+            if ( length($host) > 76 ) {
+                $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
+            }
+            print colorize("bold", colorize("red", colorize("underline", $hostStr))), "\n";
+            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{stuck}->{$host}};
+        }
+    }
+
+    if( @{$queue->{running}} ) {
+        print colorize("bold", colorize("underline", "ALREADY RUNNING")), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{running}};
+    }
+    
+    if( @{$queue->{quieted}} ) {
+        print colorize("bold", colorize("underline", "QUIETED")), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{quieted}};
+    }
 }
 
 sub tail {

@@ -84,6 +84,54 @@ sub views {
     return wantarray ? @out : \@out;
 }
 
+sub queue {
+    my ( $self ) = @_;
+    my $uri = "$self->{baseuri}/queue/api/json?depth=0&tree=items[task[color,name,url],why,stuck]";
+    my $res = $self->{ua}->get($uri);
+    #print $res->decoded_content;
+    my $data = JSON::Syck::Load($res->decoded_content());
+    my %blocked;
+    my %stuck;
+    my @running;
+    my @quieted;
+    for my $item ( @{$data->{items}} ) {
+        my $job = WWW::Jenkins::Job->new(
+            %{$item->{task}},
+            inQueue => 1,
+            jenkins => $self
+        );
+
+        if( $item->{stuck} ) {
+            if( $item->{why} =~ /([^ ]+) (is|are) offline/ ) {
+                push @{$stuck{$1}}, $job;
+            }
+            else {
+                warn "don't understand why something is stuck: $item->{why}\n";
+            }
+        }
+        else {
+            if( $item->{why} =~ /Waiting for next available executor on (.*)/ ) {
+                push @{$blocked{$1}}, $job;
+            }
+            elsif( $item->{why} =~ /already in progress/ ) {
+                push @running, $job;
+            }
+            elsif( $item->{why} =~ /quiet period/ ) {
+                push @quieted, $job;
+            }
+            else {
+                warn "don't understand why something is enqueued: $item->{why}\n";
+            }
+        }
+    }
+    return {
+        blocked => \%blocked,
+        stuck   => \%stuck,
+        running => \@running,
+        quieted => \@quieted,
+    };
+}
+
 sub login {
     my ( $self ) = @_;
     return if $self->{logged_in};
