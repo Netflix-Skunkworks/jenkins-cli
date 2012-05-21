@@ -22,6 +22,7 @@ use YAML::Syck;
 use Term::ANSIColor;
 use Getopt::Long;
 use WWW::Jenkins;
+use File::Basename qw();
 
 $|++;
 
@@ -48,6 +49,7 @@ Commands:
     enable <pattern>:    enable a job
     wipeout <pattern>:   delete current build workspace for a job
     q|queue:             shows pending build queue grouped by build-slaves
+    hist|history:        list history of builds for a job
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -60,7 +62,7 @@ $config->{baseuri}  ||= "http://jenkins";
 $config->{user} ||= $ENV{USER};
 
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout q queue);
+my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
@@ -108,8 +110,9 @@ else {
 BEGIN { 
     # create function aliases
     no warnings "once";
-    *ls = \&list;
-    *q  = \&queue;
+    *ls   = \&list;
+    *q    = \&queue;
+    *hist = \&history;
 
     # these routines are all the same, just loop over all jobs
     # and try to run the operation on each job.
@@ -210,6 +213,22 @@ sub tail {
         print $content;
         sleep 1;
     }
+}
+
+sub history {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my @jobs = $job->history();
+    for my $job ( @jobs ) {
+        my $markers = "";
+        $markers .= "*" if $job->is_running;
+        $markers .= "?" if $job->was_aborted;
+        $markers .= "+" if $job->is_queued;
+        print "#" , $job->number(), 
+            " - ", colorize($job->color, scalar localtime($job->started)),
+            sprintf("%-3s [%07.03f sec]\n", $markers, $job->duration);
+    }        
 }
 
 sub require_one {

@@ -69,7 +69,7 @@ sub views {
         # turns A/B into A/view/B which is needed
         # in jenkins uri for subviews
         my $viewPath = join("/view/", split '/', $view);
-        my $uri = "$self->{baseuri}/view/$viewPath/api/json?depth=1&tree=views[name,url],jobs[name,inQueue,url,lastBuild[number,url],color]";
+        my $uri = "$self->{baseuri}/view/$viewPath/api/json?depth=1&tree=views[name,url],jobs[name,inQueue,url,lastBuild[number,url,timestamp,duration],color]";
         my $res = $self->{ua}->get($uri);
         my $data = JSON::Syck::Load($res->decoded_content());
         # we dont know if the view has subviews or it it has jobs, so try for both

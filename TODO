@@ -1,3 +1,3 @@
 * add man/perldoc documentation
 * make deps variable ie use YAML instead of YAML::Syck if available
-* add "history" command to print out build history
+* allow tail on older builds
