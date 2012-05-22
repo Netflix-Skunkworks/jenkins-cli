@@ -31,8 +31,12 @@ jobs:
       - MyJob-1
       - MyJob-2
       - MyJob-3
-
 stoplight: 1
+# ssl_opts is any option listed in "perldoc IO::Socket::SSL"
+ssl_opts:
+      # by default we ignore invalid certs; set to nil to validate
+      SSL_verify_callback:
+      SSL_version: SSLv3
 
 COPYRIGHT and LICENSE
 ----------------------------------------------------------------------------

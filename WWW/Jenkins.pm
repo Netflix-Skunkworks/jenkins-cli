@@ -39,7 +39,11 @@ sub new {
         cookie_jar => HTTP::Cookies->new(
             file => "$ENV{HOME}/.$self->{user}-cookies.txt",
             autosave => 1,
-        )
+        ),
+        ssl_opts => {
+            SSL_verify_callback => sub { 1 },
+            $self->{ssl_opts} ? %{$self->{ssl_opts}} : ()
+        }
     );
 
     $self->{baseuri} || die "baseuri option required";
