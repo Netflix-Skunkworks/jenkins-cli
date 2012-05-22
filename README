@@ -3,12 +3,13 @@ Simple Jenkins command line interface written in perl.
 USAGE
 ----------------------------------------------------------------------------
 $ jenkins --help
-Usage: jenkins [options] [command] [<pattern>]
+Usage: ./jenkins [options] [command] [<pattern>]
 
 Global Options:
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
+    --view=<name>:   speficy a list of jobs by view
 
 Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
@@ -18,6 +19,8 @@ Commands:
     disable <pattern>:   disable job
     enable <pattern>:    enable a job
     wipeout <pattern>:   delete current build workspace for a job
+    q|queue:             shows pending build queue grouped by build-slaves
+    hist|history:        list history of builds for a job
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
