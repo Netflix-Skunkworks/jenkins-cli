@@ -41,6 +41,13 @@ ssl_opts:
       SSL_verify_callback:
       SSL_version: SSLv3
 
+STATIC SCRIPT
+----------------------------------------------------------------------------
+to fetch and run the script without having to install the libraries you can
+just run:
+     curl https://raw.github.com/Netflix-Skunkworks/jenkins-cli/master/jenkins-static > ./jenkins
+     chmod 755 ./jenkins
+
 COPYRIGHT and LICENSE
 ----------------------------------------------------------------------------
 Copyright 2012 Netflix, Inc.
