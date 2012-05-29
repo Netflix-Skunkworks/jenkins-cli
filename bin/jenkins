@@ -1,0 +1,271 @@
+#!/usr/bin/env perl
+
+#  Copyright 2012 Netflix, Inc.
+#
+#     Licensed under the Apache License, Version 2.0 (the "License");
+#     you may not use this file except in compliance with the License.
+#     You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#     Unless required by applicable law or agreed to in writing, software
+#     distributed under the License is distributed on an "AS IS" BASIS,
+#     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#     See the License for the specific language governing permissions and
+#     limitations under the License.
+
+
+use strict;
+use warnings;
+
+use YAML::Syck;
+use Term::ANSIColor;
+use Getopt::Long;
+use WWW::Jenkins;
+use File::Basename qw();
+
+$|++;
+
+sub usage {
+    my $err = shift || 0;
+    my $io = $err ? *STDERR : *STDOUT;
+
+    print $io ("-")x76,"\n" if $err;
+    print $io <<EOM;
+Usage: $0 [options] [command] [<pattern>]
+
+Global Options:
+    --baseuri=<uri>: base uri to jenkins server [http://jenkins]
+    --stoplight:     make blue builds green [off]
+    --job=<name>:    specify a job name, can be repeated
+    --view=<name>:   speficy a list of jobs by view
+
+Commands:
+    ls|list [<pattern>]: show status of builds, optionally filter on pattern
+    start <pattern>:     start job
+    stop <pattern>:      stop job
+    tail <pattern>:      tail the most recent build log for a job
+    disable <pattern>:   disable job
+    enable <pattern>:    enable a job
+    wipeout <pattern>:   delete current build workspace for a job
+    q|queue:             shows pending build queue grouped by build-slaves
+    hist|history:        list history of builds for a job
+
+* Note <pattern> can be any regular expression to match jobs in your
+  default job list/view
+EOM
+    exit $err;
+}
+
+my $config = -f "$ENV{HOME}/.jenkins" ? YAML::Syck::LoadFile("$ENV{HOME}/.jenkins") : {};
+$config->{baseuri}  ||= "http://jenkins";
+$config->{user} ||= $ENV{USER};
+
+my @actions;
+my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history);
+
+my %options;
+$options{$_} = sub { push @actions, shift } for @commands;
+
+GetOptions(
+    "help"      => sub { usage(0) },
+    "baseuri=s" => \$config->{baseuri},
+    "stoplight" => \$config->{stoplight},
+    "job=s@"    => \$config->{jobs},
+    "view=s@"   => \$config->{views},
+    "yes"       => \$config->{yes},
+    "color!"    => \$config->{color},
+    "verbose"   => \$config->{verbose},
+    "user"      => \$config->{user},
+    "stuck"     => \$config->{stuck},
+    %options,
+) || usage(1);
+
+my $jenkins = WWW::Jenkins->new(%$config);
+
+my @args;
+for my $arg ( @ARGV ) {
+    if( grep { $arg eq $_ } @commands ) {
+        push @actions, $arg;
+    }
+    else {
+        push @args, $arg;
+    }
+}
+
+my $filter = shift @args || ".";
+
+if( !@actions ) {
+    list(load("list"), @args);
+}
+else {
+    for my $action ( @actions ) {
+        no strict "refs";
+        
+        my $func = *{"main::$action"};
+        $func->(load($action), \@args);
+    }
+}
+
+BEGIN { 
+    # create function aliases
+    no warnings "once";
+    *ls   = \&list;
+    *q    = \&queue;
+    *hist = \&history;
+
+    # these routines are all the same, just loop over all jobs
+    # and try to run the operation on each job.
+    for my $func (qw(start stop disable enable wipeout)) {
+        no strict 'refs';
+        *{"main::$func"} = sub {
+            my ( $jobs, $args ) = @_;
+            confirm_multiple($func, $jobs) if @$jobs > 1;
+            for my $job ( @$jobs ) {
+                eval {
+                    $job->$func()
+                };
+                printf "%s %s: %s\n", ucfirst($func), $job->name(), $@ ? "ERROR: $@" : "OK";
+                       
+            }
+        }
+    }
+};
+
+{
+    my $jobs;
+    sub load {
+        my $action = shift;
+        return [] if $action eq 'q' || $action eq 'queue';
+        return $jobs if $jobs;
+        my %uniq;
+        my @jobs =  grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$config->{jobs}});
+        push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$config->{views}});
+        
+        if( $filter ) {
+            @jobs = grep { $_->name =~ /$filter/ } @jobs;
+            my @exact = grep { $_->name eq $filter } @jobs;
+            @jobs = @exact if @exact;
+            
+            if( ! @jobs ) {
+                die "No jobs found for pattern /$filter/\n";
+            }
+        }
+        return $jobs = \@jobs;
+    }
+}
+
+sub list {
+    my ( $jobs, $args ) = @_;
+    for my $job ( @$jobs ) {
+        my $markers = "";
+        $markers .= "*" if $job->is_running;
+        $markers .= "?" if $job->was_aborted;
+        $markers .= "+" if $job->is_queued;
+        print colorize($job->color, $job->name), "$markers\n";
+    }        
+}
+
+sub queue {
+    my $queue = $jenkins->queue();
+
+    for my $host ( keys %{$queue->{blocked}} ) {
+        my $hostStr = $host;
+        # if hostname will wrap, just truncate the middle
+        if ( length($host) > 76 ) {
+            $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
+        }
+        print colorize("bold", colorize("underline", $hostStr)), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{blocked}->{$host}};
+    }
+
+    if( $config->{stuck} ) {
+        for my $host ( keys %{$queue->{stuck}} ) {
+            my $hostStr = $host;
+            # if hostname will wrap, just truncate the middle
+            if ( length($host) > 76 ) {
+                $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
+            }
+            print colorize("bold", colorize("red", colorize("underline", $hostStr))), "\n";
+            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{stuck}->{$host}};
+        }
+    }
+
+    if( @{$queue->{running}} ) {
+        print colorize("bold", colorize("underline", "ALREADY RUNNING")), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{running}};
+    }
+    
+    if( @{$queue->{quieted}} ) {
+        print colorize("bold", colorize("underline", "QUIETED")), "\n";
+        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{quieted}};
+    }
+}
+
+sub tail {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my $cursor = $job->logCursor;
+    while(1) {
+        my $content = $cursor->();
+        last unless defined $content;
+        print $content;
+        sleep 1;
+    }
+}
+
+sub history {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my @jobs = $job->history();
+    for my $job ( @jobs ) {
+        my $markers = "";
+        $markers .= "*" if $job->is_running;
+        $markers .= "?" if $job->was_aborted;
+        print "#" , $job->number(), 
+            " - ", colorize($job->color, scalar localtime($job->started)),
+            sprintf("%-2s [%07.03f sec]\n", $markers, $job->duration);
+    }        
+}
+
+sub require_one {
+    my ( $jobs ) = @_;
+    if ( @$jobs > 1 ) {
+        my $prog = File::Basename::basename($0);
+        my ($pkg, $func) = (caller(1))[0,3];
+        $func =~ s/$pkg\:://;
+        die scalar(@$jobs)
+            . " matches for pattern /$filter/ but only one job can be sent to: $prog $func\nMatches:\n\t"
+            . join("\n\t", map { $_->{name} } @$jobs )
+            . "\n";
+    }
+}
+
+sub confirm_multiple {
+    my ($operation, $jobs) = @_;
+    return if $config->{yes};
+    my ($in, $out) = $jenkins->stdio;
+    while(1) {
+        print $out "Mutliple jobs found for pattern /$filter/\n";
+        print $out "    ", $_->name, "\n" for @$jobs;
+        print $out "Do you want to $operation all of them? [y/N]: ";
+        my $ans = <$in>;
+        chomp($ans);
+        if( !$ans || $ans =~ /^n/i ) {
+            exit;
+        }
+        if( $ans =~ /^y/i ) {
+            return;
+        }
+        print $out "Sorry, didn't understand \"$ans\"\n";
+    }   
+}
+
+sub colorize {
+    my ( $color ) = shift;
+    # dont colorize when redirected to non-tty
+    return @_ unless -t STDOUT;
+    return color($color), @_, color("reset");
+}
