@@ -106,14 +106,22 @@ sub queue {
         );
 
         if( $item->{stuck} ) {
+            if( !$item->{why} ) {
+                warn "no reason given why $item->{task}->{name} is stuck\n";
+                next;
+            }
             if( $item->{why} =~ /([^ ]+) (is|are) offline/ ) {
                 push @{$stuck{$1}}, $job;
             }
             else {
-                warn "don't understand why something is stuck: $item->{why}\n";
+                warn "don't understand why $item->{task}->{name} is stuck: $item->{why}\n";
             }
         }
         else {
+            if( !$item->{why} ) {
+                warn "no reason given why $item->{task}->{name} is enqueued\n";
+                next;
+            }
             if( $item->{why} =~ /Waiting for next available executor on (.*)/ ) {
                 push @{$blocked{$1}}, $job;
             }
@@ -124,7 +132,7 @@ sub queue {
                 push @quieted, $job;
             }
             else {
-                warn "don't understand why something is enqueued: $item->{why}\n";
+                warn "don't understand why $item->{task}->{name} is enqueued: $item->{why}\n";
             }
         }
     }
