@@ -198,6 +198,18 @@ sub enable {
     return 1;
 }
 
+sub millis {
+    eval "use Time::HiRes";
+    if( $@ ) {
+        return time() * 1000;
+    }
+    else {
+        return Time::HiRes::time() * 1000
+    }
+}
+        
+    
+
 sub history {
     my ( $self ) = @_;
     my $res = $self->ua->get("$self->{url}/api/json?depth=11&tree=builds[result,url,number,building,timestamp,duration]");
@@ -205,8 +217,9 @@ sub history {
     my @out;
     for my $build ( @{$data->{builds}} ) {
         my $color;
-        if( $data->{building} ) {
+        if( $build->{building} ) {
             $color = $self->{color};
+            $build->{duration} ||=  $self->millis  - $build->{timestamp}
         }
         else {
             $color = 
