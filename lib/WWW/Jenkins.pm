@@ -18,7 +18,6 @@ use warnings;
 use WWW::Jenkins::Job;
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
-use JSON::Syck qw();
 
 our @CLEANUP;
 
@@ -59,7 +58,7 @@ sub jobs {
         my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color";
 
         my $res = $self->{ua}->get($uri);
-        my $data = JSON::Syck::Load($res->decoded_content());
+        my $data = parse_json($res->decoded_content());
         push @out, WWW::Jenkins::Job->new(%$data, jenkins => $self);
     }
     return wantarray ? @out : \@out;
@@ -75,7 +74,7 @@ sub views {
         my $viewPath = join("/view/", split '/', $view);
         my $uri = "$self->{baseuri}/view/$viewPath/api/json?depth=1&tree=views[name,url],jobs[name,inQueue,url,lastBuild[number,url,timestamp,duration],color]";
         my $res = $self->{ua}->get($uri);
-        my $data = JSON::Syck::Load($res->decoded_content());
+        my $data = parse_json($res->decoded_content());
         # we dont know if the view has subviews or it it has jobs, so try for both
         # and recurse if we find a subview
         if( $data->{jobs} ) {
@@ -93,7 +92,7 @@ sub queue {
     my $uri = "$self->{baseuri}/queue/api/json?depth=0&tree=items[task[color,name,url],why,stuck]";
     my $res = $self->{ua}->get($uri);
     #print $res->decoded_content;
-    my $data = JSON::Syck::Load($res->decoded_content());
+    my $data = parse_json($res->decoded_content());
     my %blocked;
     my %stuck;
     my @running;
@@ -242,6 +241,36 @@ sub password {
     select $old;
     return $pass;
 }
+
+{
+    my $parser;
+    sub parse_json {
+        return $parser->(@_) if $parser;
+
+        no parser, so find one
+        eval "use JSON::XS";
+        unless( $@ ) {
+            $parser = JSON::XS->can("decode_json") || JSON->can("from_json");
+            return $parser->(@_) if $parser;
+        }
+        eval "use JSON";
+        unless ( $@ ) {
+            $parser = JSON->can("decode_json") || JSON->can("jsonToObj");
+            return $parser->(@_) if $parser;
+        }
+        eval "use JSON::DWIW";
+        unless ( $@ ) {
+            $parser = JSON::DWIW->can("from_json");
+            return $parser->(@_) if $parser;
+        }
+        eval "use JSON::Syck";
+        unless ( $@ ) {
+            $parser = JSON::Syck->can("Load");
+            return $parser->(@_) if $parser;
+        }
+        die "No valid JSON parser found, try JSON::XS, JSON, JSON::DWIW, or JSON::Syck";
+    }       
+}        
 
 END { 
     for my $cleaner ( @CLEANUP ) {
