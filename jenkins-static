@@ -104,7 +104,7 @@ sub _load_lastBuild {
 sub start {
     my ( $self ) = @_;
     $self->j->login();
-    my $resp = $self->ua->post("$self->{url}/build", {});
+    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec"});
     if( $resp->is_error ) {
         die "Failed to start $self->{name}, got error: " . $resp->status_line;
     }
@@ -199,6 +199,18 @@ sub enable {
     return 1;
 }
 
+sub millis {
+    eval "use Time::HiRes";
+    if( $@ ) {
+        return time() * 1000;
+    }
+    else {
+        return Time::HiRes::time() * 1000
+    }
+}
+        
+    
+
 sub history {
     my ( $self ) = @_;
     my $res = $self->ua->get("$self->{url}/api/json?depth=11&tree=builds[result,url,number,building,timestamp,duration]");
@@ -206,8 +218,9 @@ sub history {
     my @out;
     for my $build ( @{$data->{builds}} ) {
         my $color;
-        if( $data->{building} ) {
+        if( $build->{building} ) {
             $color = $self->{color};
+            $build->{duration} ||=  $self->millis  - $build->{timestamp}
         }
         else {
             $color = 
@@ -334,14 +347,22 @@ sub queue {
         );
 
         if( $item->{stuck} ) {
+            if( !$item->{why} ) {
+                warn "no reason given why $item->{task}->{name} is stuck\n";
+                next;
+            }
             if( $item->{why} =~ /([^ ]+) (is|are) offline/ ) {
                 push @{$stuck{$1}}, $job;
             }
             else {
-                warn "don't understand why something is stuck: $item->{why}\n";
+                warn "don't understand why $item->{task}->{name} is stuck: $item->{why}\n";
             }
         }
         else {
+            if( !$item->{why} ) {
+                warn "no reason given why $item->{task}->{name} is enqueued\n";
+                next;
+            }
             if( $item->{why} =~ /Waiting for next available executor on (.*)/ ) {
                 push @{$blocked{$1}}, $job;
             }
@@ -352,7 +373,7 @@ sub queue {
                 push @quieted, $job;
             }
             else {
-                warn "don't understand why something is enqueued: $item->{why}\n";
+                warn "don't understand why $item->{task}->{name} is enqueued: $item->{why}\n";
             }
         }
     }
@@ -374,19 +395,13 @@ sub login {
     # logged in already
     my $res = $self->{ua}->get("$self->{baseuri}/user/$self->{user}/?");
     if ( $res->decoded_content =~ />log in</ ) {
-        warn "PRE_LOGIN: ", $res->as_string;
-        my $resp = $res = $self->{ua}->post(
+        $res = $self->{ua}->post(
             "$self->{baseuri}/j_acegi_security_check", {
                 j_username => $self->{user},
                 j_password => $self->password(),
             }
         );
-        warn "LOGIN: ", $resp->as_string, "\n";
-        $resp = $self->{ua}->get("$self->{baseuri}/user/$self->{user}/?"); 
-        warn "USER: ", $resp->as_string, "\n";
-        $resp = $self->{ua}->head("$self->{baseuri}/user/$self->{user}/?"); 
-        warn "USER2: ", $resp->as_string, "\n";
-        exit;
+        $self->{ua}->get("$self->{baseuri}/user/$self->{user}/?"); 
         $self->{ua}->cookie_jar->scan(
             sub {
                 my @args = @_;
@@ -536,12 +551,12 @@ Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
     start <pattern>:     start job
     stop <pattern>:      stop job
-    tail <job>:          tail the most recent build log for a job
+    tail <pattern>:      tail the most recent build log for a job
     disable <pattern>:   disable job
     enable <pattern>:    enable a job
     wipeout <pattern>:   delete current build workspace for a job
     q|queue:             shows pending build queue grouped by build-slaves
-    hist|history <job>:  list history of builds for a job
+    hist|history:        list history of builds for a job
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -549,16 +564,7 @@ EOM
     exit $err;
 }
 
-my $config = {};
-if( -f "$ENV{HOME}/.jenkins" ) {
-    $config = YAML::Syck::LoadFile("$ENV{HOME}/.jenkins");
-    if( $config->{api_token} ) {
-        my $mode = (stat("$ENV{HOME}/.jenkins"))[2];
-        if( $mode & 0077 ) {
-            die "$ENV{HOME}/.jenkins has api_token, but is not secured.  please run: chmod 0600 $ENV{HOME}/.jenkins\n";
-        }
-    }
-}
+my $config = -f "$ENV{HOME}/.jenkins" ? YAML::Syck::LoadFile("$ENV{HOME}/.jenkins") : {};
 $config->{baseuri}  ||= "http://jenkins";
 $config->{user} ||= $ENV{USER};
 
@@ -660,8 +666,8 @@ sub list {
     my ( $jobs, $args ) = @_;
     for my $job ( @$jobs ) {
         my $markers = "";
-        $markers .= "?" if $job->was_aborted;
         $markers .= "*" if $job->is_running;
+        $markers .= "?" if $job->was_aborted;
         $markers .= "+" if $job->is_queued;
         print colorize($job->color, $job->name), "$markers\n";
     }        

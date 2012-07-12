@@ -103,7 +103,7 @@ sub _load_lastBuild {
 sub start {
     my ( $self ) = @_;
     $self->j->login();
-    my $resp = $self->ua->post("$self->{url}/build", {});
+    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec"});
     if( $resp->is_error ) {
         die "Failed to start $self->{name}, got error: " . $resp->status_line;
     }
