@@ -488,7 +488,7 @@ sub password {
     sub parse_json {
         return $parser->(@_) if $parser;
 
-        no parser, so find one
+        # no parser, so find one
         eval "use JSON::XS";
         unless( $@ ) {
             $parser = JSON::XS->can("decode_json") || JSON::XS->can("from_json");
