@@ -96,7 +96,7 @@ sub _load_lastBuild {
     my ( $self ) = shift;
     my $uri = "$self->{url}/api/json?depth=0&tree=lastBuild[url,duration,timestamp,number]";
     my $res = $self->ua->get($uri);
-    my $data = Jenkins::parse_json($res->decoded_content());
+    my $data = WWW::Jenkins::parse_json($res->decoded_content());
     return %{$self->{lastBuild}} = %{$data->{lastBuild}};
 }
 
@@ -213,7 +213,7 @@ sub millis {
 sub history {
     my ( $self ) = @_;
     my $res = $self->ua->get("$self->{url}/api/json?depth=11&tree=builds[result,url,number,building,timestamp,duration]");
-    my $data = Jenkins::parse_json($res->decoded_content());
+    my $data = WWW::Jenkins::parse_json($res->decoded_content());
     my @out;
     for my $build ( @{$data->{builds}} ) {
         my $color;
