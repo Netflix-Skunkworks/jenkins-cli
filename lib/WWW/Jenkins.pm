@@ -18,6 +18,7 @@ use warnings;
 use WWW::Jenkins::Job;
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
+use URI;
 
 our @CLEANUP;
 
@@ -34,9 +35,13 @@ sub new {
         ? "WWW::Jenkins::UserAgent"
         : "LWP::UserAgent";
     
+    $self->{baseuri} || die "baseuri option required";
+
+    
+    
     $self->{ua} ||= $UA->new(
         cookie_jar => HTTP::Cookies->new(
-            file => "$ENV{HOME}/.$self->{user}-cookies.txt",
+            file => "$ENV{HOME}/.$self->{user}-".URI->new($self->{baseuri})->host()."-cookies.txt",
             autosave => 1,
         ),
         ssl_opts => {
@@ -45,8 +50,6 @@ sub new {
         }
     );
 
-    $self->{baseuri} || die "baseuri option required";
-    
     return $self;
 }
 
