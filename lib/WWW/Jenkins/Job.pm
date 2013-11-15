@@ -198,6 +198,15 @@ sub enable {
     return 1;
 }
 
+sub config {
+    my ( $self ) = @_;
+    my $resp = $self->ua->get("$self->{url}/config.xml", {});
+    if( $resp->is_error ) {
+        die "Failed get config.xml for $self->{name}, got error: " . $resp->status_line;
+    }
+    return $resp->decoded_content();
+}
+
 sub millis {
     eval "use Time::HiRes";
     if( $@ ) {
