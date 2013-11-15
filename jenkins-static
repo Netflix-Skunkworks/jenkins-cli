@@ -199,6 +199,15 @@ sub enable {
     return 1;
 }
 
+sub config {
+    my ( $self ) = @_;
+    my $resp = $self->ua->get("$self->{url}/config.xml", {});
+    if( $resp->is_error ) {
+        die "Failed get config.xml for $self->{name}, got error: " . $resp->status_line;
+    }
+    return $resp->decoded_content();
+}
+
 sub millis {
     eval "use Time::HiRes";
     if( $@ ) {
@@ -259,6 +268,7 @@ use warnings;
 
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
+use URI;
 
 our @CLEANUP;
 
@@ -275,9 +285,13 @@ sub new {
         ? "WWW::Jenkins::UserAgent"
         : "LWP::UserAgent";
     
+    $self->{baseuri} || die "baseuri option required";
+
+    
+    
     $self->{ua} ||= $UA->new(
         cookie_jar => HTTP::Cookies->new(
-            file => "$ENV{HOME}/.$self->{user}-cookies.txt",
+            file => "$ENV{HOME}/.$self->{user}-".URI->new($self->{baseuri})->host()."-cookies.txt",
             autosave => 1,
         ),
         ssl_opts => {
@@ -286,8 +300,6 @@ sub new {
         }
     );
 
-    $self->{baseuri} || die "baseuri option required";
-    
     return $self;
 }
 
@@ -586,6 +598,7 @@ Commands:
     wipeout <pattern>:   delete current build workspace for a job
     q|queue:             shows pending build queue grouped by build-slaves
     hist|history:        list history of builds for a job
+    conf|config:         dump config.xml for a job
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -593,31 +606,45 @@ EOM
     exit $err;
 }
 
-my $config = -f "$ENV{HOME}/.jenkins" ? YAML::Syck::LoadFile("$ENV{HOME}/.jenkins") : {};
-$config->{baseuri}  ||= "http://jenkins";
-$config->{user} ||= $ENV{USER};
-
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history);
+my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
 
+my %opts = ();
 GetOptions(
     "help"      => sub { usage(0) },
-    "baseuri=s" => \$config->{baseuri},
-    "stoplight" => \$config->{stoplight},
-    "job=s@"    => \$config->{jobs},
-    "view=s@"   => \$config->{views},
-    "yes"       => \$config->{yes},
-    "color!"    => \$config->{color},
-    "verbose"   => \$config->{verbose},
-    "user"      => \$config->{user},
-    "stuck"     => \$config->{stuck},
+    "baseuri=s" => \$opts{baseuri},
+    "stoplight" => \$opts{stoplight},
+    "job=s@"    => \$opts{jobs},
+    "view=s@"   => \$opts{views},
+    "yes"       => \$opts{yes},
+    "color!"    => \$opts{color},
+    "verbose"   => \$opts{verbose},
+    "user"      => \$opts{user},
+    "stuck"     => \$opts{stuck},
     %options,
 ) || usage(1);
 
-my $jenkins = WWW::Jenkins->new(%$config);
+for my $key ( keys %opts ) {
+    delete $opts{$key} unless defined $opts{$key}
+}
+
+my @jenkins = ();
+
+for my $cfg ( glob("$ENV{HOME}/.jenkins*" ) ) {
+    if( -f $cfg ) {
+        my $config = YAML::Syck::LoadFile($cfg);
+        $config->{baseuri}  ||= "http://jenkins";
+        $config->{user} ||= $ENV{USER};
+        push @jenkins, WWW::Jenkins->new(%$config, %opts);
+    }
+}
+
+if( !@jenkins ) {
+    push @jenkins, WWW::Jenkins->new( baseuri => "http://jenkins", user => $ENV{USER}, %opts)
+}
 
 my @args;
 for my $arg ( @ARGV ) {
@@ -649,6 +676,7 @@ BEGIN {
     *ls   = \&list;
     *q    = \&queue;
     *hist = \&history;
+    *conf = \&config;
 
     # these routines are all the same, just loop over all jobs
     # and try to run the operation on each job.
@@ -674,9 +702,12 @@ BEGIN {
         my $action = shift;
         return [] if $action eq 'q' || $action eq 'queue';
         return $jobs if $jobs;
-        my %uniq;
-        my @jobs =  grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$config->{jobs}});
-        push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$config->{views}});
+        my @jobs;
+        for my $jenkins ( @jenkins ) {
+            my %uniq;
+            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$jenkins->{jobs}});
+            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
+        }
         
         if( $filter ) {
             @jobs = grep { $_->name =~ /$filter/ } @jobs;
@@ -703,40 +734,42 @@ sub list {
 }
 
 sub queue {
-    my $queue = $jenkins->queue();
-
-    for my $host ( keys %{$queue->{blocked}} ) {
-        my $hostStr = $host;
-        # if hostname will wrap, just truncate the middle
-        if ( length($host) > 76 ) {
-            $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
-        }
-        print colorize("bold", colorize("underline", $hostStr)), "\n";
-        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{blocked}->{$host}};
-    }
-
-    if( $config->{stuck} ) {
-        for my $host ( keys %{$queue->{stuck}} ) {
+    for my $jenkins ( @jenkins ) {
+        my $queue = $jenkins->queue();
+        for my $host ( keys %{$queue->{blocked}} ) {
             my $hostStr = $host;
             # if hostname will wrap, just truncate the middle
             if ( length($host) > 76 ) {
                 $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
             }
-            print colorize("bold", colorize("red", colorize("underline", $hostStr))), "\n";
-            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{stuck}->{$host}};
+            print colorize("bold", colorize("underline", $hostStr)), "\n";
+            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{blocked}->{$host}};
+        }
+
+        if ( $jenkins->{stuck} ) {
+            for my $host ( keys %{$queue->{stuck}} ) {
+                my $hostStr = $host;
+                # if hostname will wrap, just truncate the middle
+                if ( length($host) > 76 ) {
+                    $hostStr = substr($host,0,31) . "..." . substr($host,-31,31);
+                }
+                print colorize("bold", colorize("red", colorize("underline", $hostStr))), "\n";
+                print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{stuck}->{$host}};
+            }
+        }
+
+        if ( @{$queue->{running}} ) {
+            print colorize("bold", colorize("underline", "ALREADY RUNNING")), "\n";
+            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{running}};
+        }
+    
+        if ( @{$queue->{quieted}} ) {
+            print colorize("bold", colorize("underline", "QUIETED")), "\n";
+            print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{quieted}};
         }
     }
-
-    if( @{$queue->{running}} ) {
-        print colorize("bold", colorize("underline", "ALREADY RUNNING")), "\n";
-        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{running}};
-    }
-    
-    if( @{$queue->{quieted}} ) {
-        print colorize("bold", colorize("underline", "QUIETED")), "\n";
-        print "  ", colorize($_->color, $_->name), "\n" for @{$queue->{quieted}};
-    }
 }
+
 
 sub tail {
     my ( $jobs, $args ) = @_;
@@ -766,6 +799,13 @@ sub history {
     }        
 }
 
+sub config {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    print $job->config();
+}
+
 sub require_one {
     my ( $jobs ) = @_;
     if ( @$jobs > 1 ) {
@@ -781,8 +821,8 @@ sub require_one {
 
 sub confirm_multiple {
     my ($operation, $jobs) = @_;
-    return if $config->{yes};
-    my ($in, $out) = $jenkins->stdio;
+    return if $jenkins[0]->{yes};
+    my ($in, $out) = $jenkins[0]->stdio;
     while(1) {
         print $out "Mutliple jobs found for pattern /$filter/\n";
         print $out "    ", $_->name, "\n" for @$jobs;

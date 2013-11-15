@@ -3,7 +3,7 @@ Simple Jenkins command line interface written in perl.
 USAGE
 ----------------------------------------------------------------------------
 $ jenkins --help
-Usage: ./jenkins [options] [command] [<pattern>]
+Usage: ./bin/jenkins [options] [command] [<pattern>]
 
 Global Options:
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
@@ -21,6 +21,7 @@ Commands:
     wipeout <pattern>:   delete current build workspace for a job
     q|queue:             shows pending build queue grouped by build-slaves
     hist|history:        list history of builds for a job
+    conf|config:         dump config.xml for a job
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -50,7 +51,7 @@ just run:
 
 COPYRIGHT and LICENSE
 ----------------------------------------------------------------------------
-Copyright 2012 Netflix, Inc.
+Copyright 2013 Netflix, Inc.
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
