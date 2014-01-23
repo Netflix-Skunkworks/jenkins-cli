@@ -22,6 +22,7 @@ Commands:
     q|queue:             shows pending build queue grouped by build-slaves
     hist|history:        list history of builds for a job
     conf|config:         dump config.xml for a job
+    create <name|pattern> <config.xml|-> : create/update new jenkins job from config.xml
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view

@@ -199,10 +199,20 @@ sub enable {
 }
 
 sub config {
-    my ( $self ) = @_;
-    my $resp = $self->ua->get("$self->{url}/config.xml", {});
+    my ( $self, $content ) = @_;
+    $self->j->login();
+    my $url = "$self->{url}/config.xml";
+    my $resp;
+    if( $content ) {
+        my $req =  HTTP::Request->new("POST", $url);
+        $req->content($content);
+        $resp = $self->ua->request($req);
+    }
+    else {
+        $resp = $self->ua->get($url, {});
+    }
     if( $resp->is_error ) {
-        die "Failed get config.xml for $self->{name}, got error: " . $resp->status_line;
+        die "Failed get/set config.xml for $self->{name}, got error: " . $resp->status_line;
     }
     return $resp->decoded_content();
 }

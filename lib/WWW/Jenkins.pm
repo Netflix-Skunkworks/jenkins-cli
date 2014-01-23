@@ -18,6 +18,8 @@ use warnings;
 use WWW::Jenkins::Job;
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
+use HTTP::Request qw();
+use Carp qw(croak);
 use URI;
 
 our @CLEANUP;
@@ -53,6 +55,22 @@ sub new {
     return $self;
 }
 
+sub create {
+    my ($self, $job, $config) = @_;
+    if( ref($job) ) {
+        return $job->config($config);
+    }
+
+    $self->login();
+    my $req =  HTTP::Request->new("POST", "$self->{baseuri}/createItem?name=$job");
+    $req->header("Content-Type" => "application/xml");
+    $req->content($config);
+    my $resp = $self->{ua}->request($req);
+    if( $resp->is_error ) {
+        die "Failed to create new job $job, got error: " . $resp->as_string;
+    }
+}
+    
 sub jobs {
     my ($self,@jobs) = @_;
     
@@ -61,8 +79,10 @@ sub jobs {
         my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color";
 
         my $res = $self->{ua}->get($uri);
-        my $data = parse_json($res->decoded_content());
-        push @out, WWW::Jenkins::Job->new(%$data, jenkins => $self);
+        if( $res->is_success ) {
+            my $data = parse_json($res->decoded_content());
+            push @out, WWW::Jenkins::Job->new(%$data, jenkins => $self);
+        }
     }
     return wantarray ? @out : \@out;
 }
@@ -248,8 +268,16 @@ sub password {
 {
     my $parser;
     sub parse_json {
-        return $parser->(@_) if $parser;
-
+        if( $parser ) {
+            my $output = eval {
+                $parser->(@_)
+            };
+            if( $@ ) {
+                croak "Failed to parse JSON:\n", @_;
+            }
+            return $output;
+        }
+                
         # no parser, so find one
         eval "use JSON::XS";
         unless( $@ ) {

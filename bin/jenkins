@@ -51,6 +51,7 @@ Commands:
     q|queue:             shows pending build queue grouped by build-slaves
     hist|history:        list history of builds for a job
     conf|config:         dump config.xml for a job
+    create <name|pattern> <config.xml|-> : create/update new jenkins job from config.xml
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -59,7 +60,7 @@ EOM
 }
 
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config);
+my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config create);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
@@ -157,7 +158,7 @@ BEGIN {
         my @jobs;
         for my $jenkins ( @jenkins ) {
             my %uniq;
-            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$jenkins->{jobs}});
+            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @{$jenkins->{jobs}});
             push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
         }
         
@@ -165,8 +166,17 @@ BEGIN {
             @jobs = grep { $_->name =~ /$filter/ } @jobs;
             my @exact = grep { $_->name eq $filter } @jobs;
             @jobs = @exact if @exact;
+
+            if( ! @jobs ) {
+                # perhaps the name is not in the config file
+                # but is a job on the jenkins master
+                for my $jenkins ( @jenkins ) {
+                    push @jobs, $jenkins->jobs($filter);
+                }
+            }
             
             if( ! @jobs ) {
+                return [$filter] if $action eq 'create';
                 die "No jobs found for pattern /$filter/\n";
             }
         }
@@ -256,6 +266,19 @@ sub config {
     require_one($jobs);
     my $job = $jobs->[0];
     print $job->config();
+}
+
+sub create {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my $configFile = shift @$args;
+    my $config = do {
+        local $/;
+        open my $fh, "<$configFile" or die "Could not read config file $configFile: $!";
+        <$fh>;
+    };
+    $jenkins[0]->create($job,$config);
 }
 
 sub require_one {
