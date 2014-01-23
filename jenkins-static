@@ -200,10 +200,20 @@ sub enable {
 }
 
 sub config {
-    my ( $self ) = @_;
-    my $resp = $self->ua->get("$self->{url}/config.xml", {});
+    my ( $self, $content ) = @_;
+    $self->j->login();
+    my $url = "$self->{url}/config.xml";
+    my $resp;
+    if( $content ) {
+        my $req =  HTTP::Request->new("POST", $url);
+        $req->content($content);
+        $resp = $self->ua->request($req);
+    }
+    else {
+        $resp = $self->ua->get($url, {});
+    }
     if( $resp->is_error ) {
-        die "Failed get config.xml for $self->{name}, got error: " . $resp->status_line;
+        die "Failed get/set config.xml for $self->{name}, got error: " . $resp->status_line;
     }
     return $resp->decoded_content();
 }
@@ -268,6 +278,8 @@ use warnings;
 
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
+use HTTP::Request qw();
+use Carp qw(croak);
 use URI;
 
 our @CLEANUP;
@@ -303,6 +315,22 @@ sub new {
     return $self;
 }
 
+sub create {
+    my ($self, $job, $config) = @_;
+    if( ref($job) ) {
+        return $job->config($config);
+    }
+
+    $self->login();
+    my $req =  HTTP::Request->new("POST", "$self->{baseuri}/createItem?name=$job");
+    $req->header("Content-Type" => "application/xml");
+    $req->content($config);
+    my $resp = $self->{ua}->request($req);
+    if( $resp->is_error ) {
+        die "Failed to create new job $job, got error: " . $resp->as_string;
+    }
+}
+    
 sub jobs {
     my ($self,@jobs) = @_;
     
@@ -311,8 +339,10 @@ sub jobs {
         my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color";
 
         my $res = $self->{ua}->get($uri);
-        my $data = parse_json($res->decoded_content());
-        push @out, WWW::Jenkins::Job->new(%$data, jenkins => $self);
+        if( $res->is_success ) {
+            my $data = parse_json($res->decoded_content());
+            push @out, WWW::Jenkins::Job->new(%$data, jenkins => $self);
+        }
     }
     return wantarray ? @out : \@out;
 }
@@ -498,8 +528,16 @@ sub password {
 {
     my $parser;
     sub parse_json {
-        return $parser->(@_) if $parser;
-
+        if( $parser ) {
+            my $output = eval {
+                $parser->(@_)
+            };
+            if( $@ ) {
+                croak "Failed to parse JSON:\n", @_;
+            }
+            return $output;
+        }
+                
         # no parser, so find one
         eval "use JSON::XS";
         unless( $@ ) {
@@ -599,6 +637,7 @@ Commands:
     q|queue:             shows pending build queue grouped by build-slaves
     hist|history:        list history of builds for a job
     conf|config:         dump config.xml for a job
+    create <name|pattern> <config.xml|-> : create/update new jenkins job from config.xml
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -607,7 +646,7 @@ EOM
 }
 
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config);
+my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config create);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
@@ -705,7 +744,7 @@ BEGIN {
         my @jobs;
         for my $jenkins ( @jenkins ) {
             my %uniq;
-            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(@{$jenkins->{jobs}});
+            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @{$jenkins->{jobs}});
             push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
         }
         
@@ -713,8 +752,17 @@ BEGIN {
             @jobs = grep { $_->name =~ /$filter/ } @jobs;
             my @exact = grep { $_->name eq $filter } @jobs;
             @jobs = @exact if @exact;
+
+            if( ! @jobs ) {
+                # perhaps the name is not in the config file
+                # but is a job on the jenkins master
+                for my $jenkins ( @jenkins ) {
+                    push @jobs, $jenkins->jobs($filter);
+                }
+            }
             
             if( ! @jobs ) {
+                return [$filter] if $action eq 'create';
                 die "No jobs found for pattern /$filter/\n";
             }
         }
@@ -804,6 +852,19 @@ sub config {
     require_one($jobs);
     my $job = $jobs->[0];
     print $job->config();
+}
+
+sub create {
+    my ( $jobs, $args ) = @_;
+    require_one($jobs);
+    my $job = $jobs->[0];
+    my $configFile = shift @$args;
+    my $config = do {
+        local $/;
+        open my $fh, "<$configFile" or die "Could not read config file $configFile: $!";
+        <$fh>;
+    };
+    $jenkins[0]->create($job,$config);
 }
 
 sub require_one {
