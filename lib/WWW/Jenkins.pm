@@ -70,6 +70,18 @@ sub create {
         die "Failed to create new job $job, got error: " . $resp->as_string;
     }
 }
+
+sub search {
+    my ($self, $substr, $max) = @_;
+    my $uri = "$self->{baseuri}/search/suggest?query=$substr&max=100";
+    my $res = $self->{ua}->get($uri);
+    my @out = ();
+    if( $res->is_success ) {
+        my $data = parse_json($res->decoded_content());
+        @out = map { $_->{name} } @{$data->{suggestions}};
+    }
+    return wantarray ? @out : \@out;
+}
     
 sub jobs {
     my ($self,@jobs) = @_;
