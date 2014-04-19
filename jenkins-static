@@ -330,6 +330,18 @@ sub create {
         die "Failed to create new job $job, got error: " . $resp->as_string;
     }
 }
+
+sub search {
+    my ($self, $substr, $max) = @_;
+    my $uri = "$self->{baseuri}/search/suggest?query=$substr&max=100";
+    my $res = $self->{ua}->get($uri);
+    my @out = ();
+    if( $res->is_success ) {
+        my $data = parse_json($res->decoded_content());
+        @out = map { $_->{name} } @{$data->{suggestions}};
+    }
+    return wantarray ? @out : \@out;
+}
     
 sub jobs {
     my ($self,@jobs) = @_;
@@ -621,6 +633,7 @@ sub usage {
 Usage: $0 [options] [command] [<pattern>]
 
 Global Options:
+    --all:           search jenkins for job names, ignore jobs in ~/.jenkins
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
@@ -654,6 +667,7 @@ $options{$_} = sub { push @actions, shift } for @commands;
 my %opts = ();
 GetOptions(
     "help"      => sub { usage(0) },
+    "all"       => \$opts{all},
     "baseuri=s" => \$opts{baseuri},
     "stoplight" => \$opts{stoplight},
     "job=s@"    => \$opts{jobs},
@@ -743,8 +757,9 @@ BEGIN {
         return $jobs if $jobs;
         my @jobs;
         for my $jenkins ( @jenkins ) {
+            my $jobNames = $opts{all} ? $jenkins->search($filter) : $jenkins->{jobs};
             my %uniq;
-            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @{$jenkins->{jobs}});
+            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @$jobNames);
             push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
         }
         
