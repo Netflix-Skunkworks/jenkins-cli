@@ -61,6 +61,7 @@ sub color {
     $color = 'faint' if $color eq 'disabled';
     $color = 'red'   if $color eq 'aborted';
     $color = 'faint' if $color eq 'grey';
+    $color = 'faint' if $color eq 'notbuilt';
     return $color;
 }
 
@@ -102,9 +103,24 @@ sub _load_lastBuild {
 }
 
 sub start {
-    my ( $self ) = @_;
+    my ( $self, $params ) = @_;
     $self->j->login();
-    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec"});
+    my @params;
+    if ( $self->{actions} ) {
+        for my $action ( @{$self->{actions}} ) {
+            if ( exists $action->{parameterDefinitions} ) {
+                for my $param ( @{$action->{parameterDefinitions}} ) {
+                    if ( exists $params->{$param->{name}} ) {
+                        push @params, { "name" => $param->{name}, "value" => $params->{$param->{name}} };
+                    }
+                    else {
+                        push @params, { "name" => $param->{name}, "value" => $param->{defaultParameterValue}->{value} };
+                    }
+                }
+            }
+        }
+    }
+    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec", json=> WWW::Jenkins::encode_json({"parameter" => \@params})});
     if( $resp->is_error ) {
         die "Failed to start $self->{name}, got error: " . $resp->status_line;
     }
@@ -348,8 +364,7 @@ sub jobs {
     
     my @out = ();
     for my $job ( @jobs ) {
-        my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color";
-
+        my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color,actions[parameterDefinitions[defaultParameterValue[value],name]]";
         my $res = $self->{ua}->get($uri);
         if( $res->is_success ) {
             my $data = parse_json($res->decoded_content());
@@ -538,41 +553,59 @@ sub password {
 }
 
 {
+
     my $parser;
-    sub parse_json {
-        if( $parser ) {
-            my $output = eval {
-                $parser->(@_)
-            };
-            if( $@ ) {
-                croak "Failed to parse JSON:\n", @_;
-            }
-            return $output;
-        }
-                
+    my $encoder;
+    sub init_json {
         # no parser, so find one
-        eval "use JSON::XS";
+        eval "use JSON::XS qw()";
         unless( $@ ) {
             $parser = JSON::XS->can("decode_json") || JSON::XS->can("from_json");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::XS->can("encode_json") || JSON::XS->can("to_json");
+            return;
         }
-        eval "use JSON";
+        eval "use JSON qw()";
         unless ( $@ ) {
             $parser = JSON->can("decode_json") || JSON->can("jsonToObj");
-            return $parser->(@_) if $parser;
+            $encoder = JSON->can("encode_json") || JSON->can("objToJson");
+            return;
         }
-        eval "use JSON::DWIW";
+        eval "use JSON::DWIW qw()";
         unless ( $@ ) {
             $parser = JSON::DWIW->can("from_json");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::DWIW->can("to_json");
+            return;
         }
-        eval "use JSON::Syck";
+        eval "use JSON::Syck qw()";
         unless ( $@ ) {
             $parser = JSON::Syck->can("Load");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::Syck->can("Dump");
+            return;
         }
         die "No valid JSON parser found, try JSON::XS, JSON, JSON::DWIW, or JSON::Syck";
+    }
+
+    sub parse_json {
+        $parser or init_json();
+        my $output = eval {
+            $parser->(@_)
+        };
+        if( $@ ) {
+            croak "Failed to parse JSON:\n", @_;
+        }
+        return $output;
     }       
+
+    sub encode_json {
+        $encoder or init_json();
+        my $output = eval {
+            $encoder->(@_)
+        };
+        if ( $@ ) {
+            croak "Failed to generate JSON:\n", @_;
+        }
+        return $output;
+    }
 }        
 
 END { 
@@ -666,17 +699,18 @@ $options{$_} = sub { push @actions, shift } for @commands;
 
 my %opts = ();
 GetOptions(
-    "help"      => sub { usage(0) },
-    "all"       => \$opts{all},
-    "baseuri=s" => \$opts{baseuri},
-    "stoplight" => \$opts{stoplight},
-    "job=s@"    => \$opts{jobs},
-    "view=s@"   => \$opts{views},
-    "yes"       => \$opts{yes},
-    "color!"    => \$opts{color},
-    "verbose"   => \$opts{verbose},
-    "user"      => \$opts{user},
-    "stuck"     => \$opts{stuck},
+    "help"       => sub { usage(0) },
+    "all"        => \$opts{all},
+    "baseuri=s"  => \$opts{baseuri},
+    "stoplight"  => \$opts{stoplight},
+    "job=s@"     => \$opts{jobs},
+    "view=s@"    => \$opts{views},
+    "yes"        => \$opts{yes},
+    "color!"     => \$opts{color},
+    "verbose"    => \$opts{verbose},
+    "user"       => \$opts{user},
+    "stuck"      => \$opts{stuck},
+    "param|p=s@" => \$opts{params},
     %options,
 ) || usage(1);
 
@@ -687,7 +721,7 @@ for my $key ( keys %opts ) {
 my @jenkins = ();
 
 for my $cfg ( glob("$ENV{HOME}/.jenkins*" ) ) {
-    if( -f $cfg ) {
+    if( ! $opts{baseuri} && -f $cfg ) {
         my $config = YAML::Syck::LoadFile($cfg);
         $config->{baseuri}  ||= "http://jenkins";
         $config->{user} ||= $ENV{USER};
@@ -740,7 +774,12 @@ BEGIN {
             confirm_multiple($func, $jobs) if @$jobs > 1;
             for my $job ( @$jobs ) {
                 eval {
-                    $job->$func()
+                    if ( $func eq 'start') {
+                        $job->$func( { map { split /=/, $_, 2 } @{$opts{params}} } )
+                    }
+                    else {
+                        $job->$func()
+                    }
                 };
                 printf "%s %s: %s\n", ucfirst($func), $job->name(), $@ ? "ERROR: $@" : "OK";
                        

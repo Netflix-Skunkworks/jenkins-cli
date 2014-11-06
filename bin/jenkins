@@ -68,17 +68,18 @@ $options{$_} = sub { push @actions, shift } for @commands;
 
 my %opts = ();
 GetOptions(
-    "help"      => sub { usage(0) },
-    "all"       => \$opts{all},
-    "baseuri=s" => \$opts{baseuri},
-    "stoplight" => \$opts{stoplight},
-    "job=s@"    => \$opts{jobs},
-    "view=s@"   => \$opts{views},
-    "yes"       => \$opts{yes},
-    "color!"    => \$opts{color},
-    "verbose"   => \$opts{verbose},
-    "user"      => \$opts{user},
-    "stuck"     => \$opts{stuck},
+    "help"       => sub { usage(0) },
+    "all"        => \$opts{all},
+    "baseuri=s"  => \$opts{baseuri},
+    "stoplight"  => \$opts{stoplight},
+    "job=s@"     => \$opts{jobs},
+    "view=s@"    => \$opts{views},
+    "yes"        => \$opts{yes},
+    "color!"     => \$opts{color},
+    "verbose"    => \$opts{verbose},
+    "user"       => \$opts{user},
+    "stuck"      => \$opts{stuck},
+    "param|p=s@" => \$opts{params},
     %options,
 ) || usage(1);
 
@@ -89,7 +90,7 @@ for my $key ( keys %opts ) {
 my @jenkins = ();
 
 for my $cfg ( glob("$ENV{HOME}/.jenkins*" ) ) {
-    if( -f $cfg ) {
+    if( ! $opts{baseuri} && -f $cfg ) {
         my $config = YAML::Syck::LoadFile($cfg);
         $config->{baseuri}  ||= "http://jenkins";
         $config->{user} ||= $ENV{USER};
@@ -142,7 +143,12 @@ BEGIN {
             confirm_multiple($func, $jobs) if @$jobs > 1;
             for my $job ( @$jobs ) {
                 eval {
-                    $job->$func()
+                    if ( $func eq 'start') {
+                        $job->$func( { map { split /=/, $_, 2 } @{$opts{params}} } )
+                    }
+                    else {
+                        $job->$func()
+                    }
                 };
                 printf "%s %s: %s\n", ucfirst($func), $job->name(), $@ ? "ERROR: $@" : "OK";
                        

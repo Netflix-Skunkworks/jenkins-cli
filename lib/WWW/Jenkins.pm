@@ -88,8 +88,7 @@ sub jobs {
     
     my @out = ();
     for my $job ( @jobs ) {
-        my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color";
-
+        my $uri = "$self->{baseuri}/job/$job/api/json?depth=0&tree=name,inQueue,url,lastBuild[number,url],color,actions[parameterDefinitions[defaultParameterValue[value],name]]";
         my $res = $self->{ua}->get($uri);
         if( $res->is_success ) {
             my $data = parse_json($res->decoded_content());
@@ -278,41 +277,59 @@ sub password {
 }
 
 {
+
     my $parser;
-    sub parse_json {
-        if( $parser ) {
-            my $output = eval {
-                $parser->(@_)
-            };
-            if( $@ ) {
-                croak "Failed to parse JSON:\n", @_;
-            }
-            return $output;
-        }
-                
+    my $encoder;
+    sub init_json {
         # no parser, so find one
-        eval "use JSON::XS";
+        eval "use JSON::XS qw()";
         unless( $@ ) {
             $parser = JSON::XS->can("decode_json") || JSON::XS->can("from_json");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::XS->can("encode_json") || JSON::XS->can("to_json");
+            return;
         }
-        eval "use JSON";
+        eval "use JSON qw()";
         unless ( $@ ) {
             $parser = JSON->can("decode_json") || JSON->can("jsonToObj");
-            return $parser->(@_) if $parser;
+            $encoder = JSON->can("encode_json") || JSON->can("objToJson");
+            return;
         }
-        eval "use JSON::DWIW";
+        eval "use JSON::DWIW qw()";
         unless ( $@ ) {
             $parser = JSON::DWIW->can("from_json");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::DWIW->can("to_json");
+            return;
         }
-        eval "use JSON::Syck";
+        eval "use JSON::Syck qw()";
         unless ( $@ ) {
             $parser = JSON::Syck->can("Load");
-            return $parser->(@_) if $parser;
+            $encoder = JSON::Syck->can("Dump");
+            return;
         }
         die "No valid JSON parser found, try JSON::XS, JSON, JSON::DWIW, or JSON::Syck";
+    }
+
+    sub parse_json {
+        $parser or init_json();
+        my $output = eval {
+            $parser->(@_)
+        };
+        if( $@ ) {
+            croak "Failed to parse JSON:\n", @_;
+        }
+        return $output;
     }       
+
+    sub encode_json {
+        $encoder or init_json();
+        my $output = eval {
+            $encoder->(@_)
+        };
+        if ( $@ ) {
+            croak "Failed to generate JSON:\n", @_;
+        }
+        return $output;
+    }
 }        
 
 END { 

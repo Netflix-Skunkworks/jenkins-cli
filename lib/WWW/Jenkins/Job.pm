@@ -60,6 +60,7 @@ sub color {
     $color = 'faint' if $color eq 'disabled';
     $color = 'red'   if $color eq 'aborted';
     $color = 'faint' if $color eq 'grey';
+    $color = 'faint' if $color eq 'notbuilt';
     return $color;
 }
 
@@ -101,9 +102,24 @@ sub _load_lastBuild {
 }
 
 sub start {
-    my ( $self ) = @_;
+    my ( $self, $params ) = @_;
     $self->j->login();
-    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec"});
+    my @params;
+    if ( $self->{actions} ) {
+        for my $action ( @{$self->{actions}} ) {
+            if ( exists $action->{parameterDefinitions} ) {
+                for my $param ( @{$action->{parameterDefinitions}} ) {
+                    if ( exists $params->{$param->{name}} ) {
+                        push @params, { "name" => $param->{name}, "value" => $params->{$param->{name}} };
+                    }
+                    else {
+                        push @params, { "name" => $param->{name}, "value" => $param->{defaultParameterValue}->{value} };
+                    }
+                }
+            }
+        }
+    }
+    my $resp = $self->ua->post("$self->{url}/build", {delay => "0sec", json=> WWW::Jenkins::encode_json({"parameter" => \@params})});
     if( $resp->is_error ) {
         die "Failed to start $self->{name}, got error: " . $resp->status_line;
     }
