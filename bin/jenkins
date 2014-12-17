@@ -39,7 +39,7 @@ Global Options:
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
-    --view=<name>:   speficy a list of jobs by view
+    --view=<name>:   specify a list of jobs by view
 
 Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
