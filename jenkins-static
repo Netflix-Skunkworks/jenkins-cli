@@ -348,13 +348,13 @@ sub create {
 }
 
 sub search {
-    my ($self, $substr, $max) = @_;
-    my $uri = "$self->{baseuri}/search/suggest?query=$substr&max=100";
+    my ($self, $filter) = @_;
+    my $uri = "$self->{baseuri}/api/json?tree=jobs[name]";
     my $res = $self->{ua}->get($uri);
     my @out = ();
     if( $res->is_success ) {
         my $data = parse_json($res->decoded_content());
-        @out = map { $_->{name} } @{$data->{suggestions}};
+        @out = grep { /$filter/ } map { $_->{name} } @{$data->{jobs}};
     }
     return wantarray ? @out : \@out;
 }
@@ -513,7 +513,7 @@ sub stdio {
 
 sub password {
     my ( $self ) = @_;
-    if ( defined $self->{password} ) {
+    if ( ref($self) && defined $self->{password} ) {
         if ( ref($self->{password}) eq 'CODE' ) {
             return $self->{password}->($self);
         }
@@ -543,7 +543,9 @@ sub password {
         };
         Term::ReadKey::ReadMode("noecho", $out);
     }
-    print $out "Jenkins Password [$self->{user}]: ";
+
+    my $user = ref($self) eq 'HASH' ? $self->{user} : $ENV{USER};
+    print $out "Jenkins Password [$user]: ";
     my $pass = <$in>;
     $CLEANUP[-1]->();
     print $out "\n";
@@ -671,9 +673,12 @@ Global Options:
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
     --view=<name>:   speficy a list of jobs by view
+    --yes:           always answer yes to any question
+    --password:      prompt for password once
 
 Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
+    login:               login to all configured jenkins masters
     start <pattern>:     start job
     stop <pattern>:      stop job
     tail <pattern>:      tail the most recent build log for a job
@@ -692,7 +697,7 @@ EOM
 }
 
 my @actions;
-my @commands = qw(ls list start stop tail disable enable wipeout q queue hist history conf config create);
+my @commands = qw(ls list login start stop tail disable enable wipeout q queue hist history conf config create);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
@@ -711,6 +716,8 @@ GetOptions(
     "user"       => \$opts{user},
     "stuck"      => \$opts{stuck},
     "param|p=s@" => \$opts{params},
+    "password"   => \$opts{password},
+    "yes"        => \$opts{yes},
     %options,
 ) || usage(1);
 
@@ -719,6 +726,10 @@ for my $key ( keys %opts ) {
 }
 
 my @jenkins = ();
+
+if( $opts{password} ) {
+    $opts{password} = WWW::Jenkins->password();
+}
 
 for my $cfg ( glob("$ENV{HOME}/.jenkins*" ) ) {
     if( ! $opts{baseuri} && -f $cfg ) {
@@ -824,6 +835,12 @@ BEGIN {
     }
 }
 
+sub login {
+    for my $jenkins ( @jenkins ) {
+        $jenkins->login();
+    }
+}
+
 sub list {
     my ( $jobs, $args ) = @_;
     for my $job ( @$jobs ) {
@@ -831,7 +848,7 @@ sub list {
         $markers .= "*" if $job->is_running;
         $markers .= "?" if $job->was_aborted;
         $markers .= "+" if $job->is_queued;
-        print colorize($job->color, $job->name), "$markers\n";
+        print colorize($job->color, $job->name), "$markers $job->{url}\n";
     }        
 }
 
@@ -938,7 +955,7 @@ sub confirm_multiple {
     my ($operation, $jobs) = @_;
     return if $jenkins[0]->{yes};
     my ($in, $out) = $jenkins[0]->stdio;
-    while(1) {
+    while(1 && ! $opts{yes} ) {
         print $out "Mutliple jobs found for pattern /$filter/\n";
         print $out "    ", $_->name, "\n" for @$jobs;
         print $out "Do you want to $operation all of them? [y/N]: ";

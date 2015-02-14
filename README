@@ -9,7 +9,7 @@ Global Options:
     --baseuri=<uri>: base uri to jenkins server [http://jenkins]
     --stoplight:     make blue builds green [off]
     --job=<name>:    specify a job name, can be repeated
-    --view=<name>:   speficy a list of jobs by view
+    --view=<name>:   specify a list of jobs by view
 
 Commands:
     ls|list [<pattern>]: show status of builds, optionally filter on pattern
@@ -47,7 +47,7 @@ STATIC SCRIPT
 ----------------------------------------------------------------------------
 to fetch and run the script without having to install the libraries you can
 just run:
-     curl https://raw.github.com/Netflix-Skunkworks/jenkins-cli/master/jenkins-static > ./jenkins
+     curl -L https://raw.githubusercontent.com/Netflix-Skunkworks/jenkins-cli/master/jenkins-static > ./jenkins
      chmod 755 ./jenkins
 
 COPYRIGHT and LICENSE
