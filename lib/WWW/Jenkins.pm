@@ -72,13 +72,13 @@ sub create {
 }
 
 sub search {
-    my ($self, $substr, $max) = @_;
-    my $uri = "$self->{baseuri}/search/suggest?query=$substr&max=100";
+    my ($self, $filter) = @_;
+    my $uri = "$self->{baseuri}/api/json?tree=jobs[name]";
     my $res = $self->{ua}->get($uri);
     my @out = ();
     if( $res->is_success ) {
         my $data = parse_json($res->decoded_content());
-        @out = map { $_->{name} } @{$data->{suggestions}};
+        @out = grep { /$filter/ } map { $_->{name} } @{$data->{jobs}};
     }
     return wantarray ? @out : \@out;
 }
