@@ -237,7 +237,7 @@ sub stdio {
 
 sub password {
     my ( $self ) = @_;
-    if ( defined $self->{password} ) {
+    if ( ref($self) && defined $self->{password} ) {
         if ( ref($self->{password}) eq 'CODE' ) {
             return $self->{password}->($self);
         }
@@ -267,7 +267,9 @@ sub password {
         };
         Term::ReadKey::ReadMode("noecho", $out);
     }
-    print $out "Jenkins Password [$self->{user}]: ";
+
+    my $user = ref($self) eq 'HASH' ? $self->{user} : $ENV{USER};
+    print $out "Jenkins Password [$user]: ";
     my $pass = <$in>;
     $CLEANUP[-1]->();
     print $out "\n";
