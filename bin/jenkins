@@ -56,6 +56,9 @@ Commands:
     hist|history:        list history of builds for a job
     conf|config:         dump config.xml for a job
     create <name|pattern> <config.xml|-> : create/update new jenkins job from config.xml
+    nodes <pattern>
+    nodesToggle <pattern>
+    nodesDelete <pattern>
 
 * Note <pattern> can be any regular expression to match jobs in your
   default job list/view
@@ -64,12 +67,14 @@ EOM
 }
 
 my @actions;
-my @commands = qw(ls list login start stop tail disable enable wipeout q queue hist history conf config create);
+my @commands = qw(ls list login start stop tail disable enable wipeout q queue hist history conf config create nodes nodesToggle nodesDelete);
 
 my %options;
 $options{$_} = sub { push @actions, shift } for @commands;
 
-my %opts = ();
+my %opts = (
+    master => "*"
+);
 GetOptions(
     "help"       => sub { usage(0) },
     "all"        => \$opts{all},
@@ -85,6 +90,13 @@ GetOptions(
     "param|p=s@" => \$opts{params},
     "password"   => \$opts{password},
     "yes"        => \$opts{yes},
+    "master=s"   => \$opts{master},
+
+    "online"     => \$opts{online},
+    "offline"    => \$opts{offline},
+    "busy"       => \$opts{busy},
+    "idle"       => \$opts{idle},
+
     %options,
 ) || usage(1);
 
@@ -98,7 +110,7 @@ if( $opts{password} ) {
     $opts{password} = WWW::Jenkins->password();
 }
 
-for my $cfg ( glob("$ENV{HOME}/.jenkins*" ) ) {
+for my $cfg ( glob("$ENV{HOME}/.jenkins*$opts{master}*" ) ) {
     if( ! $opts{baseuri} && -f $cfg ) {
         my $config = YAML::Syck::LoadFile($cfg);
         $config->{baseuri}  ||= "http://jenkins";
@@ -168,37 +180,48 @@ BEGIN {
 
 {
     my $jobs;
+    my $nodes;
     sub load {
         my $action = shift;
-        return [] if $action eq 'q' || $action eq 'queue';
-        return $jobs if $jobs;
-        my @jobs;
-        for my $jenkins ( @jenkins ) {
-            my $jobNames = $opts{all} ? $jenkins->search($filter) : $jenkins->{jobs};
-            my %uniq;
-            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @$jobNames);
-            push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
+        return [] if $action eq 'q' || $action eq 'queue' || $action eq 'login';
+        if( $action =~ /^nodes/) {
+            return $nodes if $nodes;
+            my @nodes;
+            for my $jenkins ( @jenkins ) {
+                push @nodes, @{$jenkins->nodes($filter)};
+            }
+            return \@nodes;
         }
-        
-        if( $filter ) {
-            @jobs = grep { $_->name =~ /$filter/ } @jobs;
-            my @exact = grep { $_->name eq $filter } @jobs;
-            @jobs = @exact if @exact;
-
-            if( ! @jobs ) {
-                # perhaps the name is not in the config file
-                # but is a job on the jenkins master
-                for my $jenkins ( @jenkins ) {
-                    push @jobs, $jenkins->jobs($filter);
-                }
+        else {
+            return $jobs if $jobs;
+            my @jobs;
+            for my $jenkins ( @jenkins ) {
+                my $jobNames = $opts{all} ? $jenkins->search($filter) : $jenkins->{jobs};
+                my %uniq;
+                push @jobs, grep { !$uniq{$_->name}++ } $jenkins->jobs(grep{ /$filter/ } @$jobNames);
+                push @jobs, grep { !$uniq{$_->name}++ } $jenkins->views(@{$jenkins->{views}});
             }
             
-            if( ! @jobs ) {
-                return [$filter] if $action eq 'create';
-                die "No jobs found for pattern /$filter/\n";
+            if( $filter ) {
+                @jobs = grep { $_->name =~ /$filter/ } @jobs;
+                my @exact = grep { $_->name eq $filter } @jobs;
+                @jobs = @exact if @exact;
+                
+                if( ! @jobs ) {
+                    # perhaps the name is not in the config file
+                    # but is a job on the jenkins master
+                    for my $jenkins ( @jenkins ) {
+                        push @jobs, $jenkins->jobs($filter);
+                    }
+                }
+                
+                if( ! @jobs ) {
+                    return [$filter] if $action eq 'create';
+                    die "No jobs found for pattern /$filter/\n";
+                }
             }
+            return $jobs = \@jobs;
         }
-        return $jobs = \@jobs;
     }
 }
 
@@ -217,6 +240,54 @@ sub list {
         $markers .= "+" if $job->is_queued;
         print colorize($job->color, $job->name), "$markers $job->{url}\n";
     }        
+}
+
+sub nodes {
+    my ( $nodes, $args ) = @_;
+    for my $node ( @$nodes ) {
+        next if $opts{idle} && $node->is_running;
+        next if $opts{busy} && !$node->is_running;
+        next if $opts{online} && $node->offline;
+        next if $opts{offline} && !$node->offline;
+        my $markers = "";
+        $markers .= "*" if $node->is_running;
+        $markers .= "?" if $node->offline && !$node->tempOffline;
+        print colorize($node->color, $node->name), "$markers @{$node->{labels}}\n";
+    }        
+}
+
+sub nodesToggle {
+    my ( $nodes, $args ) = @_;
+    my @nodes = grep {
+        $opts{idle} && !$_->is_running
+            || $opts{busy} && $_->is_running
+            || $opts{online} && !$_->offline
+            || $opts{offline} && $_->offline
+    } @$nodes;
+    confirm_multiple("toggleOffline", \@nodes, "node") if @nodes > 1;
+    for my $node ( @nodes ) {
+        eval {
+            $node->toggleOffline()
+        };
+        printf "toggleOffline %s: %s\n",$node->name(), $@ ? "ERROR: $@" : "OK";
+    }
+}
+
+sub nodesDelete {
+    my ( $nodes, $args ) = @_;
+    my @nodes = grep {
+        $opts{idle} && !$_->is_running
+            || $opts{busy} && $_->is_running
+            || $opts{online} && !$_->offline
+            || $opts{offline} && $_->offline
+    } @$nodes;
+    confirm_multiple("nodeDelete", \@nodes, "node") if @nodes > 1;
+    for my $node ( @nodes ) {
+        eval {
+            $node->remove()
+        };
+        printf "nodeDelete %s: %s\n",$node->name(), $@ ? "ERROR: $@" : "OK";
+    }
 }
 
 sub queue {
@@ -319,11 +390,12 @@ sub require_one {
 }
 
 sub confirm_multiple {
-    my ($operation, $jobs) = @_;
+    my ($operation, $jobs, $type) = @_;
+    $type ||= "job";
     return if $jenkins[0]->{yes};
     my ($in, $out) = $jenkins[0]->stdio;
     while(1 && ! $opts{yes} ) {
-        print $out "Mutliple jobs found for pattern /$filter/\n";
+        print $out "Mutliple ${type}s found for pattern /$filter/\n";
         print $out "    ", $_->name, "\n" for @$jobs;
         print $out "Do you want to $operation all of them? [y/N]: ";
         my $ans = <$in>;

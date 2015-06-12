@@ -16,6 +16,7 @@ use warnings;
 #     limitations under the License.
 
 use WWW::Jenkins::Job;
+use WWW::Jenkins::Node;
 use LWP::UserAgent qw();
 use HTTP::Cookies qw();
 use HTTP::Request qw();
@@ -96,6 +97,57 @@ sub jobs {
         }
     }
     return wantarray ? @out : \@out;
+}
+
+sub nodes {
+    my ($self, $label)  = @_;
+    $self->login();
+    my @out = ();
+    my $uri = "$self->{baseuri}/computer/(master)/config.xml";
+    my $res = $self->{ua}->get($uri);
+    if( $res->is_success ) {
+        my $xml = $res->decoded_content();
+
+        my $res = $self->{ua}->get("$self->{baseuri}/computer/api/json?depth=1&tree=computer[displayName,executors[idle],numExecutors,offline,temporarilyOffline]");
+        my $data = WWW::Jenkins::parse_json($res->decoded_content);
+        my %nodeData = map { $_->{displayName} => $_ } @{$data->{computer}};
+        #print "$xml\n";
+        my @slaves =  ($xml =~ m{<slave>(.*?)</slave>}sg );
+        for my $slave (@slaves) {
+            my %names = ($slave =~ m{(\s+)<name>(.*?)</name>}sg );
+            my $smallest_indent = (sort keys %names)[0];
+            my $name = $names{$smallest_indent};
+            my ($labels) = ($slave =~ m{<label>(.*?)</label>}sg );
+            if( $label && $labels =~ /$label/ || $name =~ /$label/ ) {
+                my @labels = sort split /\s+/, $labels;
+                if ( $name eq 'All' ) {
+                    print "$slave\n";
+                    use Data::Dumper;
+                    print Dumper(\%names);
+                    print "smallest: \"$smallest_indent\" => $names{$smallest_indent}\n";
+                    exit;
+                }
+                #print "$name => $labels\n";
+                push @out, WWW::Jenkins::Node->new(jenkins => $self, name => $name, labels => \@labels, %{$nodeData{$name}})
+            }
+        }
+        #use Data::Dumper;
+        #warn Dumper(\@slaves);
+        #print $xml;
+        #exit -1;
+    }
+    return \@out;
+        
+    # my $uri = "$self->{baseuri}/computer/api/json?depth=0&tree=computer[displayName]";
+    # my $res = $self->{ua}->get($uri);
+    # if( $res->is_success ) {
+    #     my $data = parse_json($res->decoded_content());
+    #     for my $node ( @{$data->{"computer"}} ) {
+            
+    #     }
+    # }
+    
+    
 }
 
 sub views {
