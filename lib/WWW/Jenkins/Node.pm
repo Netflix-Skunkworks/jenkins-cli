@@ -76,4 +76,8 @@ sub remove {
 *copy = *WWW::Jenkins::Job::copy;
 *j = *WWW::Jenkins::Job::j;
 *ua = *WWW::Jenkins::Job::ua;
-*color = *WWW::Jenkins::Job::color
+*color = *WWW::Jenkins::Job::color;
+
+if ( 0 ) {  # fixed use only once nonsense
+    copy(); j(); ua(); color();
+}
